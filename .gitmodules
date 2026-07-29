@@ -1,0 +1,4 @@
+[submodule "rust-analyzer"]
+	path = bench/rust-analyzer
+	url = https://github.com/rust-lang/rust-analyzer.git
+	branch = master
