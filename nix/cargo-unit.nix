@@ -108,7 +108,7 @@
   verbatim, every other source file an empty stub at its exact path), so a
   source body edit re-runs only the cheap render IFD (whose include-scan
   reads real contents), never the workspace-wide cargo resolve; adding or
-  removing files, or editing a manifest, re-plans (#3900).
+  removing files, or editing a manifest, re-plans.
   Pass `workspaceRoot = ./.` for local workspaces so `src` can stay a filtered
   build input while package scopes are carved from the real checkout root.
   Rendering fails when a unit path cannot be tied back to `src` or `vendorDir`.
@@ -119,7 +119,7 @@
   a subset of roots (say the native cdylibs out of a graph that also plans a
   wasm target) never builds the other entries' units. A second buildWorkspace
   call that only narrows `cargoTargets` yields byte-identical root
-  derivations (pinned by a tests/default.nix assertion) and adds a unit-graph
+  derivations and adds a unit-graph
   plus render IFD; create a separate workspace only when unit identity
   changes (profile, policy, rustToolchain, env, extraRustcArgs). `env` and
   `extraRustcArgs` fold into every unit, so values or native-library flags for
@@ -290,7 +290,7 @@
     # path. The stub derivation's inputs are the manifest slice and the
     # relative path list alone, so a source BODY edit changes neither input
     # and the whole-workspace cargo resolve never re-runs; adding or removing
-    # files, or touching a manifest, re-plans, correctly (#3900). Relative
+    # files, or touching a manifest, re-plans, correctly. Relative
     # paths must match `src` exactly: the render stage below maps the planned
     # unit paths back onto the real tree.
     #
@@ -460,7 +460,7 @@
       # directory stringifies to a location outside the store entirely.
       # Spelling it both ways named one tree in the graph rewrite and a
       # different one as the root to slice against, so every local unit came
-      # out "outside workspace root" (#4239). Interpolation is the correct one
+      # out "outside workspace root". Interpolation is the correct one
       # of the two: the renderer both strips this prefix off the rewritten
       # graph paths and reads the tree behind it to include-scan file
       # contents, and only the interpolated form is a declared, readable
@@ -700,7 +700,7 @@
       slow-timeout = { period = "${rawArgs.nextestPerTestTimeout or "120s"}", terminate-after = 1 }
     '';
     nextestNonInteractiveEnv = {
-      # #1597: Nix builders can attach cargo-nextest to a pseudo-terminal
+      # Nix builders can attach cargo-nextest to a pseudo-terminal
       # without carrying the usual CI environment. Force the plain reporter
       # path so progress redraws cannot stall dispatcher handoffs.
       NEXTEST_HIDE_PROGRESS_BAR = "true";
@@ -861,9 +861,9 @@
   `<target>-all` remains available for callers that need the full harness as a
   single compatibility check.
 
-  Use this when the caller has one shared workspace (`ix.rustWorkspace.units`)
-  so all repo-owned crates ride the same unit graph. Use `buildBinary` when
-  a crate needs its own workspace (different policy, fetched source, etc).
+  Use this when the caller has one shared workspace so all its crates ride the
+  same unit graph. Use `buildBinary` when a crate needs its own workspace
+  (different policy, fetched source, etc).
   */
   selectBinaryWithTests = workspace: {
     binary,
@@ -889,8 +889,8 @@
 
   The library version of `selectBinaryWithTests`, for crates that ship a
   `lib` target rather than a binary. `library` is the crate's library unit
-  key (Cargo's underscored name, e.g. `ix_vt`); `packageName` is the Cargo
-  package name used to look up test targets (e.g. `ix-vt`).
+  key (Cargo's underscored name, e.g. `my_crate`); `packageName` is the Cargo
+  package name used to look up test targets (e.g. `my-crate`).
   */
   selectLibraryWithTests = workspace: {
     library,
@@ -996,12 +996,11 @@
   from source.
 
   The result is byte-contract-identical to a library unit the renderer would
-  emit (`packages/nix-cargo-unit/src/render.rs:1375-1402`): `$out` carries
+  emit (see the library-unit builder in `src/render.rs`): `$out` carries
   `$out/lib/lib<name>-<hash>.rlib`, the matching `.rmeta`, and
   `$out/nix-support/extern-path` holding the absolute path to the `.rlib`.
   A downstream unit therefore consumes it exactly like a from-source unit:
-  `-L dependency=$out/lib` and `--extern <crate>=$(cat $out/nix-support/extern-path)`
-  (`render.rs:1015-1047`).
+  `-L dependency=$out/lib` and `--extern <crate>=$(cat $out/nix-support/extern-path)`.
 
   Pass the produced derivation through `buildWorkspace`'s `extraUnits` (keyed by
   `"<name>-<version>-<hash>"`). Because a unit's `<hash>` hashes package
@@ -1019,7 +1018,7 @@
   Trust boundary: an injected prebuilt unit BYPASSES every per-unit policy gate
   (clippy, `--deny-panics`, unused-crate-dependencies) because those gates run
   on from-source compile units, not on a copied artifact. Inject only trusted
-  artifacts (e.g. a first-party SDK rlib fetched from your own R2).
+  artifacts (e.g. a first-party SDK rlib fetched from your own store).
 
   `extraLibraries` is usually unnecessary: `buildWorkspace`'s `libraries` set
   derives from `units`, and a downstream crate links via `units.<key>`, so
