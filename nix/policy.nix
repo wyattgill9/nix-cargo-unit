@@ -1,27 +1,17 @@
-# The Rust build policy: the quality/correctness gates applied to a build
-# (unused-dep denial, panic-freedom, cargo-audit, cargo-machete, clippy, tests)
-# and the linker choice, plus their consequences (rustc args, native inputs,
-# lint flags) and the workspace/crate policy-check derivations. Owns the default
-# policy and the caller-merge. The check builders run cargo in the vendored tree,
-# so the vendor module's `vendorConfigScript` / `cargoLockFile` are threaded in.
+# Build policy: the quality gates applied to a workspace (unused-dependency
+# denial, panic freedom, cargo-audit, cargo-machete, clippy), the test runner
+# settings, and the linker choice — declared once as module options so the
+# defaults, the caller merge, and typo rejection all come from one place.
+#
+# This module is pure: it declares the schema, resolves a caller's partial
+# policy against it, and turns a resolved policy into flags. The derivations a
+# policy implies live in `checks.nix` (workspace gates) and in the renderer
+# (per-unit gates).
 {
   lib,
   pkgs,
-  clippyPackage,
-  vendorConfigScript,
-  cargoLockFile,
 }: let
-  # Pinned source revisions, kept out of the expressions so a bump is a
-  # one-line JSON edit rather than an inline hash literal.
-  pins = lib.importJSON ./pins.json;
-
-  inherit
-    (builtins)
-    filter
-    removeAttrs
-    ;
-
-  inherit (lib) any;
+  inherit (builtins) removeAttrs;
 
   toFlagSequence = flag:
     lib.concatMap (arg: [
@@ -29,12 +19,37 @@
       arg
     ]);
 
-  nonEmpty = l: l != [];
+  # Pinned source revisions, kept out of the expressions so a bump is a
+  # one-line JSON edit rather than an inline hash literal.
+  pins = lib.importJSON ./pins.json;
 
-  # The policy schema, declared once as module options so the defaults, the
-  # caller-merge, and typo rejection (no `freeformType`, so an unknown key throws)
-  # all come from one declaration. `clippy.denyWarnings` is a write-only knob: the
-  # resolver post-filters `deniedLints` with it and drops it from the result.
+  # "No policy" for a package the caller did not list under `tests.byPackage`.
+  # Declared here so it is also the submodule's own defaults and the two cannot
+  # drift.
+  noTestPolicy = {
+    skip = [];
+    testThreads = null;
+  };
+
+  # The per-package test policy: what the runners are told, expressed as data
+  # rather than as runner-specific argv. `test-run.nix` renders it to libtest
+  # arguments and to cargo-nextest filters.
+  testPolicyModule = {
+    options = {
+      skip = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = noTestPolicy.skip;
+        description = "Test names to skip.";
+      };
+      testThreads = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = noTestPolicy.testThreads;
+        # A string, not an int: cargo-nextest also accepts `num-cpus` here.
+        description = "Concurrency for this package's harness (a count, or `num-cpus`).";
+      };
+    };
+  };
+
   policyModule = {
     options = {
       denyUnusedCrateDependencies = lib.mkOption {
@@ -100,17 +115,20 @@
         enable = lib.mkOption {
           type = lib.types.bool;
           default = true;
-          description = "Run clippy (per unit in a workspace, whole-crate otherwise).";
+          description = "Run clippy-driver on every compile unit.";
         };
         package = lib.mkOption {
           type = lib.types.package;
-          default = clippyPackage;
-          description = "The clippy package providing clippy-driver.";
-        };
-        cargoArgs = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = ["--all-targets"];
-          description = "Target-selection args for the whole-crate `cargo clippy`.";
+          default = pkgs.clippy;
+          description = ''
+            The clippy package providing clippy-driver.
+
+            Clippy is a rustc_private binary tied to the exact rustc it was
+            built against, so the clippy graph is imported with this package's
+            own `toolchain` rather than the workspace toolchain. A package
+            without that attribute (nixpkgs' plain `clippy`) therefore only
+            works with `enable = false`.
+          '';
         };
         deniedLints = lib.mkOption {
           type = lib.types.listOf lib.types.str;
@@ -122,22 +140,22 @@
           default = [];
           description = "Lints allowed via `-A`.";
         };
-        denyWarnings = lib.mkOption {
-          type = lib.types.bool;
-          default = true;
-          description = "When false, drop `warnings` from deniedLints so a warning does not fail the build.";
-        };
       };
       tests = {
-        enable = lib.mkOption {
-          type = lib.types.bool;
-          default = true;
-          description = "Run the crate's tests as part of the build.";
-        };
         useNextest = lib.mkOption {
           type = lib.types.bool;
           default = true;
-          description = "Use cargo-nextest for parallel test execution.";
+          description = "Run each test target through cargo-nextest instead of the libtest harness.";
+        };
+        perTestTimeout = lib.mkOption {
+          type = lib.types.str;
+          default = "120s";
+          description = "cargo-nextest slow-timeout period after which a single test is terminated.";
+        };
+        byPackage = lib.mkOption {
+          type = lib.types.attrsOf (lib.types.submodule testPolicyModule);
+          default = {};
+          description = "Per-package test-runner policy, keyed by Cargo package name.";
         };
       };
       linker = {
@@ -178,9 +196,9 @@
 
   # Named partial policies for recurring intents, so callers reference one name
   # instead of re-spelling the same field set. Resolved against the schema like
-  # any caller policy. `pureBuild` turns off every gate: for a pure build artifact
-  # (a cross graph, a prebuilt-injection graph) where the native graph already
-  # ran clippy/audit/machete/unused-dep over the same sources.
+  # any caller policy. `pureBuild` turns off every gate: for a pure build
+  # artifact (a cross graph, a prebuilt-injection graph) where the native graph
+  # already ran clippy/audit/machete/unused-dep over the same sources.
   policyPresets = {
     pureBuild = {
       denyUnusedCrateDependencies = false;
@@ -191,45 +209,32 @@
   };
 
   # Resolve a caller's partial policy against the schema: defaults, merge, and
-  # typo rejection come from `evalModules`. `denyWarnings` is applied here by
-  # post-filtering `deniedLints` (and then dropped, so it carries no effect of its
-  # own); `_module` is stripped so the result is a plain policy record matching
-  # the historical shape.
-  resolvePolicy = userPolicy: let
-    evaluated =
-      (lib.evalModules {
-        modules = [
-          policyModule
-          {config = userPolicy;}
-        ];
-      }).config;
-    deniedLints =
-      if evaluated.clippy.denyWarnings
-      then evaluated.clippy.deniedLints
-      else filter (lint: lint != "warnings") evaluated.clippy.deniedLints;
-  in
-    removeAttrs evaluated ["_module"]
-    // {
-      clippy =
-        removeAttrs evaluated.clippy ["denyWarnings"]
-        // {
-          inherit deniedLints;
-        };
-    };
+  # typo rejection all come from `evalModules`.
+  resolvePolicy = userPolicy:
+    removeAttrs
+    (lib.evalModules {
+      modules = [
+        policyModule
+        {config = userPolicy;}
+      ];
+    })
+    .config ["_module"];
+
+  testPolicyFor = policy: packageName: policy.tests.byPackage.${packageName} or noTestPolicy;
 
   # `platform` is a rust target triple (e.g. `x86_64-unknown-linux-gnu`); the fast
   # linker is per-OS, so each branch is gated on the triple: mold for a `-linux-`
-  # triple, lld for an `-apple-darwin` triple. Host builds pass
-  # `pkgs.stdenv.hostPlatform.config` rather than a sentinel, so the tests run on a
-  # real triple and a non-triple argument fails loudly instead of defaulting.
+  # triple, lld for an `-apple-darwin` triple. Callers pass a resolved triple
+  # (`rustflags.nix` owns that resolution), so a non-triple argument fails loudly
+  # instead of defaulting.
   #
   # The lld branch uses the `-B${pkgs.lld}/bin -fuse-ld=lld` incantation a
   # Linux->darwin cross toolchain needs (the `-B` makes the clang driver resolve
-  # `ld64.lld`), but applies only to a *native* darwin
-  # link: it is additionally gated on a darwin build host. The cross toolchain already
-  # injects `-fuse-ld=lld` via `CARGO_TARGET_<T>_LINKER`, so without this host gate a
+  # `ld64.lld`), but applies only to a *native* darwin link: it is additionally
+  # gated on a darwin build host. The cross toolchain already injects
+  # `-fuse-ld=lld` via `CARGO_TARGET_<T>_LINKER`, so without this host gate a
   # future darwin-host darwin-cross would stack the flag on that wrapper.
-  rustcArgsForPolicyForPlatform = policy: platform:
+  linkerRustcArgsForPlatform = policy: platform:
     lib.optionals (policy.linker.useMold && lib.hasInfix "-linux-" platform) [
       "-C"
       "link-arg=-fuse-ld=mold"
@@ -250,16 +255,15 @@
       "link-arg=-B${pkgs.lld}/bin"
     ];
 
-  nativeBuildInputsForPolicy = policy: lib.optional policy.linker.useMold pkgs.mold ++ lib.optional policy.linker.useLld pkgs.lld;
-
-  clippyLintArgs = policy:
-    toFlagSequence "-D" policy.clippy.deniedLints ++ toFlagSequence "-A" policy.clippy.allowedLints;
+  linkerNativeInputs = policy:
+    lib.optional policy.linker.useMold pkgs.mold
+    ++ lib.optional policy.linker.useLld pkgs.lld;
 
   # Cargo only emits `[lints.clippy]` into the unit graph's `lint_rustflags`
   # when invoked as `cargo clippy`, not `cargo build`. Parse the workspace
   # manifest and emit the equivalent `-D|-W|-A clippy::<lint>` flags so
   # per-unit clippy sees the workspace lint policy.
-  clippyLintFlagsFromManifest = manifestPath: let
+  manifestClippyLintArgs = manifestPath: let
     # `clippy::cargo` group lints invoke `cargo` to read workspace metadata.
     # Per-unit clippy runs in a sandboxed build directory without a discoverable
     # Cargo.toml (the unit's source closure is package-shaped), so those lints
@@ -276,9 +280,7 @@
 
     manifest = lib.importTOML manifestPath;
 
-    raw = manifest.workspace.lints.clippy or manifest.lints.clippy or {};
-
-    filtered = removeAttrs raw cargoGroupClippyLints;
+    declared = manifest.workspace.lints.clippy or manifest.lints.clippy or {};
 
     entryFor = name: value: {
       inherit name;
@@ -286,9 +288,7 @@
       priority = value.priority or 0;
     };
 
-    entries = lib.mapAttrsToList entryFor filtered;
-
-    sortedEntries = lib.sortOn (v: v.priority) entries;
+    entries = lib.mapAttrsToList entryFor (removeAttrs declared cargoGroupClippyLints);
 
     levelFlags = {
       deny = "-D";
@@ -307,196 +307,41 @@
       "clippy::${entry.name}"
     ];
   in
-    lib.concatMap entryFlags sortedEntries;
+    lib.concatMap entryFlags (lib.sortOn (entry: entry.priority) entries);
 
-  # The three policy-check derivations for an already-normalized `args` + crate
-  # name. clippy also needs to know whether the caller set `clippy.cargoArgs` (a
-  # fact the policy merge flattens away), so the owner threads it through. Built
-  # lazily and gated by the `crateChecks` / `workspaceChecks` wrappers below, so a
-  # check the caller's altitude does not select is never forced.
-  checkDerivations = {
-    args,
-    pname,
-    clippyCargoArgsSet ? false,
-  }: let
-    configScript = vendorConfigScript {
-      inherit (args) cargoExtraConfig cargoLock vendorDir;
-    };
+  # Every `-D`/`-W`/`-A` flag appended to a per-unit clippy-driver invocation.
+  # Manifest-derived flags come first so `policy.clippy` entries land later in
+  # argv and can override them: Cargo's `[lints.clippy]` is the load-bearing
+  # source for most workspaces, and the policy lists are the escape hatch for
+  # callers without one.
+  clippyLintArgs = {
+    policy,
+    manifest,
+  }:
+    manifestClippyLintArgs manifest
+    ++ toFlagSequence "-D" policy.clippy.deniedLints
+    ++ toFlagSequence "-A" policy.clippy.allowedLints;
 
-    cargoAuditCheck = let
-      inherit (args.policy) cargoAudit;
-      lockFile = cargoLockFile args.cargoLock;
+  # The renderer flags a policy implies: both gates are emitted per unit by the
+  # renderer, so they are decided at render time rather than at build time.
+  renderFlags = policy:
+    lib.optional policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies"
+    ++ lib.optional policy.denyPanics "--deny-panics";
 
-      auditFlags = toFlagSequence "--deny" cargoAudit.deny ++ toFlagSequence "--ignore" cargoAudit.ignore;
-    in
-      pkgs.runCommand "${pname}-cargo-audit"
-      {
-        nativeBuildInputs = [pkgs.cargo-audit];
-        # Stage the lockfile through a derivation input so its store path
-        # is realized in every builder's sandbox, not just the one that
-        # evaluated the expression.
-        inherit lockFile;
-      }
-      ''
-        export CARGO_HOME="$TMPDIR/cargo-home"
-        mkdir -p "$CARGO_HOME"
-        cp "$lockFile" "$TMPDIR/Cargo.lock"
-        cd "$TMPDIR"
-
-        cargo-audit audit \
-          --file Cargo.lock \
-          --db ${lib.escapeShellArg cargoAudit.db} \
-          --no-fetch \
-          --stale \
-          ${lib.escapeShellArgs auditFlags}
-
-        mkdir -p "$out"
-      '';
-
-    cargoMacheteCheck =
-      pkgs.runCommand "${pname}-cargo-machete"
-      (
-        {
-          nativeBuildInputs =
-            [
-              args.rustToolchain
-              pkgs.cacert
-              pkgs.cargo-machete
-            ]
-            ++ args.nativeBuildInputs;
-          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-          CARGO_NET_OFFLINE = "true";
-        }
-        // args.env
-      )
-      ''
-        ${configScript}
-
-        cd ${args.src}
-
-        cargo-machete \
-          --with-metadata --skip-target-dir \
-          ${lib.escapeShellArgs args.policy.cargoMachete.extraArgs} \
-          .
-
-        mkdir -p "$out"
-      '';
-    cargoClippyCheck = let
-      # If the caller already picks targets via `cargoArgs` (e.g.
-      # `--all-targets`) and didn't override `clippy.cargoArgs`, drop the
-      # policy default so we don't double up.
-      cargoTargetSelectors = [
-        "--all-targets"
-        "--lib"
-        "--bin"
-        "--bins"
-        "--example"
-        "--examples"
-        "--test"
-        "--tests"
-        "--bench"
-        "--benches"
-      ];
-
-      lacksTarget = lib.mutuallyExclusive args.cargoArgs cargoTargetSelectors;
-
-      hasLintPolicy = any nonEmpty [
-        args.policy.clippy.deniedLints
-        args.policy.clippy.allowedLints
-      ];
-
-      clippyArgs =
-        args.cargoArgs
-        ++ lib.optionals (lacksTarget || clippyCargoArgsSet) args.policy.clippy.cargoArgs
-        ++ lib.optional hasLintPolicy "--"
-        ++ clippyLintArgs args.policy;
-
-      rustFlags = lib.concatStringsSep " " (
-        rustcArgsForPolicyForPlatform args.policy pkgs.stdenv.hostPlatform.config
-      );
-    in
-      pkgs.runCommand "${pname}-cargo-clippy"
-      (
-        {
-          nativeBuildInputs =
-            [
-              args.rustToolchain
-              pkgs.cacert
-              args.policy.clippy.package
-              pkgs.stdenv.cc
-            ]
-            ++ args.nativeBuildInputs
-            ++ nativeBuildInputsForPolicy args.policy;
-          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-        }
-        // args.env
-      )
-      (
-        ''
-          ${configScript}
-
-          export CARGO_TARGET_DIR="$TMPDIR/cargo-target"
-
-        ''
-        + (lib.optionalString (rustFlags != "")
-          /*
-          bash
-          */
-          ''
-            export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }"${lib.escapeShellArg rustFlags}
-          '')
-        +
-        /*
-        bash
-        */
-        ''
-
-          cd ${args.src}
-
-          cargo clippy \
-            --frozen --offline \
-            ${lib.escapeShellArgs clippyArgs}
-
-          mkdir -p "$out"
-        ''
-      );
-  in {
-    inherit cargoAuditCheck cargoMacheteCheck cargoClippyCheck;
-  };
-
-  # The per-crate gate set: clippy runs as a whole-crate `cargo clippy`. Each
-  # check is gated on its enable flag and stays lazy.
-  crateChecks = {
-    args,
-    pname,
-    clippyCargoArgsSet ? false,
-  }: let
-    checks = checkDerivations {inherit args pname clippyCargoArgsSet;};
-  in
-    lib.optionalAttrs args.policy.cargoAudit.enable {cargoAudit = checks.cargoAuditCheck;}
-    // lib.optionalAttrs args.policy.cargoMachete.enable {cargoMachete = checks.cargoMacheteCheck;}
-    // lib.optionalAttrs args.policy.clippy.enable {cargoClippy = checks.cargoClippyCheck;};
-
-  # The workspace gate set: audit + machete only. A workspace runs clippy per
-  # unit in the renderer (`clippyByPackage`), so a whole-workspace `cargo clippy`
-  # is deliberately absent here rather than suppressed after the fact.
-  workspaceChecks = {
-    args,
-    pname,
-  }: let
-    checks = checkDerivations {inherit args pname;};
-  in
-    lib.optionalAttrs args.policy.cargoAudit.enable {cargoAudit = checks.cargoAuditCheck;}
-    // lib.optionalAttrs args.policy.cargoMachete.enable {cargoMachete = checks.cargoMacheteCheck;};
+  # cargo-audit's own `--deny`/`--ignore` argv. Lives here rather than in
+  # `checks.nix` so every policy-to-flags mapping is in one file.
+  cargoAuditArgs = policy:
+    toFlagSequence "--deny" policy.cargoAudit.deny
+    ++ toFlagSequence "--ignore" policy.cargoAudit.ignore;
 in {
   inherit
-    resolvePolicy
-    policyPresets
-    rustcArgsForPolicyForPlatform
-    nativeBuildInputsForPolicy
+    cargoAuditArgs
     clippyLintArgs
-    clippyLintFlagsFromManifest
-    crateChecks
-    workspaceChecks
+    linkerNativeInputs
+    linkerRustcArgsForPlatform
+    policyPresets
+    renderFlags
+    resolvePolicy
+    testPolicyFor
     ;
 }

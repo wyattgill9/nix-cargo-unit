@@ -1,8 +1,7 @@
-# Vendoring for the cargo-unit / buildPackage pipeline: turn a `Cargo.lock` into
-# a package-shaped vendor directory (one entry per dependency) plus the cargo
-# config script that points cargo at it. Owns the lockfile-path coercion and all
-# registry/git source fetching. Pure function of its inputs; nothing here reads
-# build policy or toolchain.
+# Vendoring: turn a `Cargo.lock` into a package-shaped vendor directory (one
+# entry per dependency) plus the cargo config script that points cargo at it.
+# Owns every registry and git source fetch. A pure function of its inputs;
+# nothing here reads build policy or the toolchain.
 {
   lib,
   pkgs,
@@ -20,18 +19,12 @@
     toJSON
     ;
 
-  inherit (lib) subtractLists;
-
-  join = lib.concatStringsSep;
-
-  joinLines = join "\n";
-
-  # The keys (under `keyFn`) carried by more than one element, for the
-  # duplicate-detection assertions below.
-  findDuplicatesBy = keyFn: items: let
-    grouped = lib.groupBy keyFn items;
-  in
-    filter (key: length grouped.${key} > 1) (attrNames grouped);
+  inherit
+    (lib)
+    concatStringsSep
+    groupBy
+    subtractLists
+    ;
 
   # The trivial builders (`writeText`, `linkFarm`) set `allowSubstitutes =
   # false`, which is right for a local build but wrong for a node Nix has to
@@ -40,11 +33,8 @@
   # These vendor nodes are all forced at eval time, so flip it back on.
   evalTimeSubstitutable = drv: drv.overrideAttrs (_: {allowSubstitutes = true;});
 
-  # A `cargoLock` reference is either `{ lockFile = <path>; }` or a bare path.
-  cargoLockFile = cargoLock: cargoLock.lockFile or cargoLock;
-
   dependencyPackages = cargoLock: let
-    lock = lib.importTOML (cargoLockFile cargoLock);
+    lock = lib.importTOML cargoLock;
   in
     filter (pkg: pkg ? source) (lock.package or []);
 
@@ -69,7 +59,7 @@
     parts = match ''git\+([^?]+)(\?(rev|tag|branch)=([^#]*))?#(.*)'' source;
   in
     if parts == null
-    then throw "rust: cannot parse git source string `${source}` from Cargo.lock"
+    then throw "cargo-unit: cannot parse git source string `${source}` from Cargo.lock"
     else {
       url = elemAt parts 0;
       refType = elemAt parts 2;
@@ -77,7 +67,10 @@
       sha = elemAt parts 4;
     };
 
-  vendorConfigScript = {
+  # The shell prelude every cargo invocation in this pipeline starts with: a
+  # private `CARGO_HOME` whose config replaces crates.io and each locked git
+  # source with the vendor directory.
+  configScript = {
     cargoExtraConfig,
     cargoLock,
     vendorDir,
@@ -88,8 +81,6 @@
       map (pkg: parseGitSource pkg.source // {inherit (pkg) source;}) (gitPackages cargoLock)
     );
 
-    # The default vendored-sources config, emitted when the vendor dir carries
-    # no `.cargo/config.toml` of its own (the aggregate `linkFarm` never does).
     vendorConfigFile = evalTimeSubstitutable (pkgs.writeText "cargo-vendor-config.toml" ''
       [source.crates-io]
       replace-with = "vendored-sources"
@@ -102,7 +93,7 @@
     # source with the vendored copy. Rendered at eval time and `cat` in, rather
     # than printf'd table by table in the builder.
     gitSourceBlock = git:
-      joinLines (
+      concatStringsSep "\n" (
         [
           ''[source."${git.source}"]''
           "git = ${toJSON git.url}"
@@ -118,12 +109,7 @@
       export CARGO_HOME="$TMPDIR/cargo-home"
       mkdir -p "$CARGO_HOME"
 
-      if [ -f "${vendorDir}/.cargo/config.toml" ]; then
-        sed 's|directory = "cargo-vendor-dir"|directory = "${vendorDir}"|' \
-          "${vendorDir}/.cargo/config.toml" > "$CARGO_HOME/config.toml"
-      else
-        cat ${vendorConfigFile} > "$CARGO_HOME/config.toml"
-      fi
+      cat ${vendorConfigFile} > "$CARGO_HOME/config.toml"
     ''
     + lib.optionalString (gitSources != []) ''
 
@@ -158,19 +144,20 @@
         unused = subtractLists gitPackageSources outputHashKeys;
       in
         assert lib.assertMsg (missing == []) ''
-          outputHashes is missing hashes for git source strings in Cargo.lock: ${join ", " missing}
+          outputHashes is missing hashes for git source strings in Cargo.lock: ${concatStringsSep ", " missing}
           Key each git hash by the exact Cargo.lock source string, for example:
           outputHashes."git+https://github.com/owner/repo#rev" = "sha256-...";
         '';
         assert lib.assertMsg (unused == []) ''
-          outputHashes contains keys that are not git source strings in Cargo.lock: ${join ", " unused}
+          outputHashes contains keys that are not git source strings in Cargo.lock: ${concatStringsSep ", " unused}
           Key each git hash by the exact Cargo.lock source string, for example:
           outputHashes."git+https://github.com/owner/repo#rev" = "sha256-...";
         ''; outputHashes;
-      # Flatten workspace inheritance in a vendored Cargo.toml before rustc sees it.
-      # The script is vendored (see the sibling .py) so a downstream rename of
-      # `pkgs/build-support/rust/replace-workspace-values.py` doesn't surface as
-      # a `readFile` error here.
+
+      # Flatten workspace inheritance in a vendored Cargo.toml before rustc sees
+      # it. The script is vendored (see the sibling .py) so a downstream rename
+      # of `pkgs/build-support/rust/replace-workspace-values.py` doesn't surface
+      # as a `readFile` error here.
       replaceWorkspaceValues = let
         python = pkgs.python3.withPackages (ps: [ps.tomli ps.tomli-w]);
       in
@@ -302,19 +289,20 @@
     # The aggregate `linkFarm` vendor dir, one symlink per dependency package
     # pointing at its `vendorSources` entry.
     vendorDir = let
-      keyFn = pkg: "${pkg.name}-${pkg.version}";
+      duplicateNameVersions = let
+        grouped = groupBy (pkg: "${pkg.name}-${pkg.version}") (gitPackages cargoLock);
+      in
+        filter (key: length grouped.${key} > 1) (attrNames grouped);
 
-      duplicateNameVersions = findDuplicatesBy keyFn (gitPackages cargoLock);
-
-      mkVendorEntry = pkg: {
-        name = "${pkg.name}-${pkg.version}";
-        path = vendorSources.${packageSourceKey pkg};
-      };
-
-      vendorEntries = map mkVendorEntry packages;
+      vendorEntries =
+        map (pkg: {
+          name = "${pkg.name}-${pkg.version}";
+          path = vendorSources.${packageSourceKey pkg};
+        })
+        packages;
     in
       assert lib.assertMsg (duplicateNameVersions == []) ''
-        Cargo.lock contains multiple git dependencies with the same name-version: ${join ", " duplicateNameVersions}
+        Cargo.lock contains multiple git dependencies with the same name-version: ${concatStringsSep ", " duplicateNameVersions}
         cargo-unit cannot generate an aggregate vendor dir for this lock without losing source identity.
       '';
         evalTimeSubstitutable (pkgs.linkFarm "cargo-vendor-dir" vendorEntries);
@@ -322,9 +310,5 @@
     inherit vendorSources vendorDir;
   };
 in {
-  inherit
-    cargoLockFile
-    vendorConfigScript
-    mkVendor
-    ;
+  inherit configScript mkVendor;
 }

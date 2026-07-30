@@ -62,7 +62,7 @@
       # `lib/rustlib`, which the rendered units reference for the std
       # `--remap-path-prefix` and for `llvm-cov`.
       #
-      # `nix/resolve.nix` derives the toolchain id baked into every unit hash
+      # `mkCargoUnit` derives the toolchain id baked into every unit hash
       # from this derivation's store path, so a nixpkgs bump that moves rustc
       # invalidates the graph instead of silently reusing artifacts built by a
       # different compiler. Cargo's `--unit-graph` is still behind
@@ -79,15 +79,14 @@
         ];
       };
 
-      # The consumer entry point from this repository's `nix/` directory: it
-      # wires vendoring (`nix/vendor.nix`), build policy (`nix/policy.nix`) and
-      # the renderer together and hands back `buildWorkspace` and friends. The
-      # whole Cargo.lock -> vendor -> unit graph -> units.nix -> per-unit
-      # derivation pipeline lives behind that one call; nothing of it is spelled
-      # out here.
-      cargoUnit = import (nix-cargo-unit + "/nix") {
+      # The consumer entry point: the flake's own library, which wires vendoring,
+      # build policy and the renderer together and hands back `buildWorkspace`
+      # and friends. The whole Cargo.lock -> vendor -> unit graph -> units.nix ->
+      # per-unit derivation pipeline lives behind that one call; nothing of it is
+      # spelled out here, and the renderer binary is built from `pkgs` rather
+      # than picked out of the input by system.
+      cargoUnit = nix-cargo-unit.lib.mkCargoUnit {
         inherit pkgs rustToolchain;
-        nixCargoUnit = nix-cargo-unit.packages.${pkgs.stdenv.hostPlatform.system}.nix-cargo-unit;
       };
 
       graph = cargoUnit.buildWorkspace {
