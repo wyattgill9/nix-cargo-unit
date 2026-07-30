@@ -744,6 +744,12 @@ There is no overlay. The library needs a Rust toolchain argument, so it cannot b
 attribute on a `pkgs`, and an overlay carrying only the CLI would be a second way to reach what
 `packages` already exposes.
 
+The only other input is `advisory-db` (`flake = false`), the RustSec database that
+`policy.cargoAudit` checks a lockfile against. It is an input rather than a rev and hash
+maintained in-tree, so `nix flake update advisory-db` bumps it and consumers inherit the pin
+through the lock; `mkCargoUnit` passes it down as the `cargoAudit.db` default. It is forced only
+when an audit check is, so a graph with the gate off never fetches it.
+
 `Cargo.toml` declares an **empty `[workspace]`**, with the reason stated: this is the bootstrap tool
 that renders Cargo unit graphs as Nix, so it cannot be built through its own output. Keeping it a
 self-contained crate with its own lockfile means vendoring it into a larger repo never folds it into

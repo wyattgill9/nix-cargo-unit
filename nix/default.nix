@@ -10,9 +10,10 @@
 #       rustToolchain = <cargo + rustc, carrying lib/rustlib>;
 #     };
 #
-# The renderer binary is built from the caller's own `pkgs` (see `package.nix`),
-# so a consumer supplies only the two things this flake cannot decide for them:
-# which nixpkgs, and which Rust toolchain.
+# The renderer binary is built from the caller's own `pkgs` (see `package.nix`)
+# and the advisory database comes from the flake's own lock, so a consumer
+# supplies only the two things this flake cannot decide for them: which nixpkgs,
+# and which Rust toolchain.
 #
 # Returns
 #   buildWorkspace         plan, render and build a workspace's unit graph
@@ -45,6 +46,10 @@
   # rendered units reference it for the std `--remap-path-prefix` and for
   # `llvm-cov` (e.g. `symlinkJoin` of `rustc.unwrapped` and `cargo`).
   rustToolchain,
+  # The RustSec advisory database `policy.cargoAudit` checks against, supplied by
+  # the flake as an input so nothing here carries a rev or a hash. Forced only
+  # when an audit check is.
+  advisoryDb,
 }: let
   inherit (pkgs) lib;
 
@@ -66,7 +71,7 @@
   hostTriple = pkgs.stdenv.hostPlatform.rust.rustcTarget;
 
   vendor = import ./vendor.nix {inherit lib pkgs;};
-  policyLib = import ./policy.nix {inherit lib pkgs;};
+  policyLib = import ./policy.nix {inherit lib pkgs advisoryDb;};
   rustflags = import ./rustflags.nix {inherit lib policyLib hostTriple;};
   checks = import ./checks.nix {
     inherit
