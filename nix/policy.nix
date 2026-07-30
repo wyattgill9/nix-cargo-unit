@@ -10,6 +10,7 @@
 {
   lib,
   pkgs,
+  advisoryDb,
 }: let
   inherit (builtins) removeAttrs;
 
@@ -18,10 +19,6 @@
       flag
       arg
     ]);
-
-  # Pinned source revisions, kept out of the expressions so a bump is a
-  # one-line JSON edit rather than an inline hash literal.
-  pins = lib.importJSON ./pins.json;
 
   # "No policy" for a package the caller did not list under `tests.byPackage`.
   # Declared here so it is also the submodule's own defaults and the two cannot
@@ -75,18 +72,13 @@
         };
         db = lib.mkOption {
           type = lib.types.package;
-          # The rev + SRI pin lives in the sibling pins.json; bump by editing
-          # the rev there and re-pinning.
-          default = pkgs.fetchFromGitHub {
-            inherit
-              (pins."advisory-db")
-              owner
-              repo
-              rev
-              hash
-              ;
-          };
-          description = "The advisory database cargo-audit checks against.";
+          default = advisoryDb;
+          description = ''
+            The advisory database cargo-audit checks against. Either a fetched
+            source tree (the flake's `advisory-db` input, which is the default)
+            or a derivation producing one; the check passes its store path to
+            `--db`.
+          '';
         };
         deny = lib.mkOption {
           type = lib.types.listOf lib.types.str;

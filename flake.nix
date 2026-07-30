@@ -3,11 +3,23 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # What `policy.cargoAudit` checks the lockfile against. An input rather than
+    # a rev + hash maintained by hand: `nix flake update advisory-db` bumps it,
+    # consumers inherit the pin through the lock, and one who wants a different
+    # database says so with `inputs.nix-cargo-unit.inputs.advisory-db.follows`
+    # (or per workspace, with `policy.cargoAudit.db`). Fetched only when an audit
+    # check is actually forced.
+    advisory-db = {
+      url = "github:rustsec/advisory-db";
+      flake = false;
+    };
   };
 
   outputs = {
     self,
     nixpkgs,
+    advisory-db,
   }: let
     systems = [
       "aarch64-darwin"
@@ -40,7 +52,14 @@
     #       rustToolchain = <cargo + rustc, carrying lib/rustlib>;
     #     };
     #     graph = cargoUnit.buildWorkspace { src = ./.; workspaceRoot = ./.; };
-    lib.mkCargoUnit = import ./nix;
+    lib.mkCargoUnit = {
+      pkgs,
+      rustToolchain,
+    }:
+      import ./nix {
+        inherit pkgs rustToolchain;
+        advisoryDb = advisory-db;
+      };
 
     # The renderer binary on its own, for a shell or a CI step that wants the
     # CLI. Consumers of the library do not need this: `mkCargoUnit` builds it.
