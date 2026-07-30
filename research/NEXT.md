@@ -76,6 +76,7 @@ One fixture workspace under `nix/tests/fixture/`, rendered and evaluated as a fl
 | `render-shapes` | element **counts and types** for `checkedRoots`, `roots`, `policyChecks`, `targetSets`, `binaries`, `libraries` |
 | `render-drv` | `nix-instantiate` on one root and one test target — `.drv` produced, inputs resolve |
 | `render-no-op-seams` | `extraUnits = {}` / `extraLibraries = {}` renders byte-identically to no seam (the property `templates/units.nix.in:175` claims) |
+| `render-builds` | *(added during Stage B, see §8.4)* the graph builds and the binary runs — the only check that can see a build-time regression |
 
 `render-shapes` is the one that matters: a length assertion is what catches the list-vs-application
 class, and `nix-instantiate --parse` alone cannot — the bug is syntactically valid.
@@ -230,3 +231,222 @@ Expected: ~25–30 s, ~13% of cold wall clock. Modest on its own. The reason to 
   (`preConfigure`, `postPatch`) on a unit breaks. Grep says nothing in-tree does; the documented
   seams are `extraRustcArgs` / `packageBuildEnv` / `packageRustcArgs` / `extraUnits`, all of which
   survive.
+
+---
+
+## 8. Outcome — measured, 2026-07-29
+
+Stage A and Stage B both landed. The correctness and maintainability goals were met; **the
+performance premise was wrong, and the stop condition in §6 fires.**
+
+### 8.1 The per-derivation tax is Nix, not stdenv
+
+The §6 gate assumed stdenv was the dominant term in the ~175 ms marginal cost, so removing it should
+have taken the figure below 110 ms. To test that, the `BENCH_BASE.md` §8 probe was re-run in *three*
+arms rather than one — the missing arm being the one that decides the question:
+
+| Arm | What it is | Marginal cost per derivation (3 reps) | Median |
+|---|---|---|---:|
+| `minimal` | plain `derivation`, builder writes `$out` and nothing else | 109.3 / 113.0 / 110.4 ms | **110.4 ms** |
+| `plain` | the real new unit shape: `__structuredAttrs`, `nix/unit-builder.sh` | 112.7 / 113.1 / 113.4 ms | **113.1 ms** |
+| `stdenv` | the old shape: `mkDerivation` + `dontUnpack`/`dontConfigure`/`dontStrip` | 123.0 / 125.9 / 123.4 ms | **123.4 ms** |
+
+`N = 40` vs `N = 160` at `max-jobs=10`, marginal = Δt / ΔN, every arm verified to actually build
+(the first attempt at the `minimal` arm silently failed — a plain derivation has no `PATH`, so
+`mkdir` was not found — which is why exit status is now checked).
+
+Three readings, in order of importance:
+
+1. **~110 ms of the ~123 ms is Nix itself.** A derivation whose builder does *nothing* costs
+   110.4 ms. That is daemon round-trips, build-directory setup, output registration, and store
+   bookkeeping. No change to the shape of a unit can touch it.
+2. **stdenv was worth ~13 ms, about 10% of the per-derivation cost — not ~50%.** The "`mkDerivation`
+   is ~2× a raw `derivation`" figure from `FASTER.md` Change 2 comes from a 10k-trivial-build
+   benchmark and **does not transfer to this workload**.
+3. **The new builder costs ~3 ms over the bare floor.** Sourcing structured attrs, building `PATH`,
+   and assembling link flags is essentially free, so there is no more to win here.
+
+Extrapolated honestly: ~10 ms × 320 units ≈ **3.3 s** of a 211 s cold build, **~1.6%**. The §6
+expectation was 25–30 s / ~13%. It was wrong by an order of magnitude.
+
+### 8.2 `BENCH_BASE.md` §8 needs correcting
+
+The 175 ms marginal figure does not reproduce: the same stdenv shape measures 123 ms today. More
+importantly, §8 attributes the cost to "sandbox setup, stdenv bash startup, phase dispatch, output
+registration" without separating them, and the three-arm probe now shows the stdenv terms in that
+list are the small ones. The §8 headline — 56 s, ~27% of the cold build, "the clearest optimization
+target in the whole document" — is not actionable: the tax is real and it is serial, but it is
+Nix's, and the only lever on it is **fewer derivations**, never cheaper ones.
+
+### 8.3 Gate results
+
+| Gate | Target | Result |
+|---|---|---|
+| Trivial-probe marginal cost | < 110 ms | **113.1 ms — not met, and unreachable** (floor is 110.4 ms) |
+| Cold build, rust-analyzer | ≤ 185 s | **not measurable**: a ~3.3 s effect is inside the ±1.5% (±3.2 s) run-to-run noise `BENCH_BASE.md` already records |
+| Correctness | `smoke` passes; the eval checks pass | **met** — rust-analyzer's ~320 units build stdenv-free, the binary answers `--version` and parses Rust; all five fixture checks pass |
+| Closure | `#rust-analyzer` stays 91.6 MiB / 2 paths | **met** — 2 paths (the binary and libiconv), 91.7 MiB |
+| Byte-identity of the seams | `extraUnits = {}` renders identically | met (`render-no-op-seams`) |
+
+**The stop condition applies.** Do not proceed to `FASTER.md` Change 1 (the metadata/codegen split)
+expecting per-derivation overhead to come down later — it will not. What the measurement does give
+that bet is a precise, no-longer-assumed penalty: **+230 derivations × ~113 ms ≈ +26 s** of
+unabsorbable serial wall clock, against a plausible 20–50 s pipelining gain. Still indeterminate in
+sign, but now the penalty term is a measured floor rather than something a future builder change
+might shrink.
+
+The re-ranking this implies: stop optimizing the *cost* of a derivation and start reducing their
+*count* (coarsening the external-dependency tier, merged doctests), or attack the 115.6 s critical
+path directly (linker swap), which is where the time that is not derivation overhead actually goes.
+
+### 8.4 The stdenv conveniences that actually bit
+
+§7 listed "lost stdenv conveniences" as mechanical. Two of the three were. The third was not, and it
+is the one worth writing down, because a fixture cannot find it — only a real workspace can.
+
+1. **PATH and the file utilities.** Mechanical, as predicted. Stated once in the template
+   (`unitToolchain`) instead of implicitly.
+2. **The cc/bintools wrappers do not read `NIX_LDFLAGS`.** They read a *salted* copy
+   (`NIX_LDFLAGS_<salt>`), and they only fold the unsalted variable into it for the dependency roles
+   named by a `NIX_CC_WRAPPER_TARGET_<role>_<salt>` marker — which stdenv's setup hook exports.
+   Without the marker `accumulateRoles` yields no roles, the fold is skipped, and **every link flag
+   the builder assembles is silently discarded**. Symptom: `ld: library not found for -lz` on a unit
+   whose zlib was right there in its inputs. The salt is not guessable, so it is threaded in from the
+   documented `pkgs.stdenv.cc.suffixSalt` passthru.
+3. **Transitive propagation, which the fixture could not catch.** A package hands its own
+   dependencies to its dependents through `nix-support/propagated-build-inputs`, and stdenv's
+   `findInputs` walks that transitively. On darwin `stdenv.defaultBuildInputs` is the Apple SDK,
+   which propagates libiconv — so with the walk missing, all ~320 rust-analyzer units compiled fine
+   and the **final link** failed with `library not found for -liconv`. Two things had to be
+   reproduced: stdenv's implicit `defaultBuildInputs`, and the transitive walk itself.
+
+Both gaps in the fixture that let (3) through are now closed. The fixture's native input is
+`pkgs.zlib.dev`, which does not itself contain `lib/libz` but propagates `zlib` — so its
+`cargo:rustc-link-lib=z` resolves only if the walk happens. And a fifth check, **`render-builds`**,
+actually *builds* the graph and runs the binary, because instantiation cannot see any of this: every
+one of these three failures happens at build time. Removing the propagation walk now reproduces
+`library not found for -lz` in the fixture, in seconds, instead of at a 320-unit workspace's final
+link.
+
+One more, purely mechanical but silent: `read -r -a arr < file` returns nonzero at EOF when the file
+has no trailing newline — which is exactly how `propagated-build-inputs` is written. Under `set -e`
+that aborted the builder before it produced a single line of log output.
+
+### 8.5 What the step was still worth
+
+None of this argues the change should be reverted. It bought, independent of speed:
+
+- **A real bug.** `checkedRoots` evaluated to a 2N-element list of alternating `withPolicyChecks`
+  lambdas and derivations, so **every policy check on every root was silently dropped**. Stage A's
+  shape check catches it in both of the ways it is wrong (element count 6 instead of 3; elements that
+  are functions rather than derivations), and a single `nix_list` emitter that parenthesizes every
+  element makes the whole class unrepresentable.
+- **Evaluation as the output contract.** Four flake checks (`render-evaluates`, `render-shapes`,
+  `render-drv`, `render-no-op-seams`) over a checked-in fixture workspace. Nothing evaluated the
+  generated Nix before; the renderer's 56 Rust tests asserted on substrings of emitted text, which
+  cannot see a shape error in syntactically valid output.
+- **The deletion ledger, in full.** All ten rows in §4 are deleted rather than ported: both
+  `dontStrip`s, `dontUnpack`/`dontConfigure`, the `postFixup` wiring and
+  `render_split_debuginfo_sidecar_post_fixup`, the `*.dwo|*.dwp` copy-loop exclusion, all three
+  `set +x`, `buildPhase`/`installPhase` as attributes, and the test that encoded the fixup ordering.
+  `pkgs.stdenv.mkDerivation` no longer appears in the unit path.
+- **One escaping regime instead of three.** `rustcArgs` and `rustcEnv` are JSON, so values no longer
+  pass through `shell::quote` *and* `nix_indented_string_fragment`. An argument containing a quote,
+  a newline, or a `$` now reaches rustc verbatim, and the tests assert on argv structure instead of
+  pattern-matching the shell text that used to produce it.
+
+The honest summary: this was a **correctness and maintainability** change that also removed ~10 ms
+per derivation. It was sold as a performance change. The measurement that would have shown that up
+front is the three-arm probe in §8.1 — a `minimal` arm alongside the `stdenv` one — and it cost about
+fifteen minutes.
+
+---
+
+## 9. Where the 133 s actually goes — measured, 2026-07-29
+
+§8 established that per-derivation cost is Nix's floor and cannot be reduced. That says what *not*
+to do; it does not say where the time is. So: a cold build of all 264 unit derivations, per-derivation
+start/stop captured from `nix build --log-format internal-json` (stamped on arrival — internal-json
+carries no timestamps of its own), with the toolchain id salted to force the rebuild rather than
+deleting anything from the store.
+
+Vendor and planner IFDs were warm, so **this is not comparable to the 211 s in `BENCH_BASE.md`**;
+it is the unit-build portion only.
+
+```
+wall clock              132.8 s
+sum of build time       419.1 s
+avg parallelism           3.2x   at --max-jobs 10
+critical path           107.1 s  = 81% of wall clock, over 22 derivations
+```
+
+| kind | count | seconds | share |
+|---|---:|---:|---:|
+| compile unit | 212 | 367.7 | 87.7% |
+| build-script compile | 25 | 30.2 | 7.2% |
+| build-script run | 25 | 19.9 | 4.7% |
+| plan / render (IFD) | 2 | 1.4 | 0.3% |
+
+### 9.1 The build is dependency-serialized, not overhead-bound
+
+419 s of work finishing in 133 s is **3.2x** parallelism against a 10x budget: seven cores idle on
+average. 81% of wall clock is one chain of 22 derivations, and five crates are 72 s of that 107 s
+path — `hir_ty` 19.3 s, `ide_assists` 14.5 s, `rust_analyzer` 14.3 s, `intern` 13.7 s, `hir_def`
+10.1 s.
+
+Per-derivation overhead **on the path** is 22 × 113 ms ≈ **2.5 s of 107 s**. This corrects §8.1's
+framing: the tax is real, but it is charged against the *sum* of build time, which has seven idle
+cores to absorb it. It is not charged against the thing that is binding.
+
+### 9.2 Metadata is ~18% of a compile, so pipelining has a large ceiling
+
+`FASTER.md` Change 1 splits each library unit into a metadata derivation (`--emit metadata`,
+frontend only) and a codegen derivation, so a dependent unblocks on metadata instead of on full
+codegen. The per-crate ceiling is `1 - metadata/full`. Measured by reading each unit's exact argument
+vector straight out of its derivation — `__structuredAttrs` stores it as data, which is what makes
+this measurable without touching the renderer — and running rustc twice:
+
+| unit | full | metadata | metadata share | earlier unblock |
+|---|---:|---:|---:|---:|
+| `intern` | 7.0 s | 0.3 s | 5% | 95% |
+| `ide_assists` | 10.9 s | 1.1 s | 10% | 90% |
+| `hir_ty` | 21.1 s | 3.8 s | 18% | 82% |
+| `hir_def` | 11.2 s | 2.0 s | 18% | 82% |
+| `base_db` | 1.2 s | 0.2 s | 18% | 82% |
+| `ide_db` | 3.8 s | 0.8 s | 20% | 80% |
+| `hir` | 4.7 s | 1.2 s | 26% | 74% |
+| `syntax` | 2.5 s | 0.8 s | 31% | 69% |
+
+The ~82 s of libraries on the critical path would contribute roughly **15 s** of metadata instead.
+Adding the final binary's own 14.3 s (a bin must fully codegen) and the one dependency codegen that
+cannot be hidden, the path plausibly lands at **50–60 s against 107 s today** — bounded also by
+total work over cores, since the frontend runs twice: ~495 s / 10 cores ≈ 50 s. The two bounds meet
+at about the same number, which is a good sign that ~50 s is the real floor rather than an artifact.
+
+### 9.3 Why Cargo's ~1.2x understates this
+
+`FASTER.md` finding 1 cites Cargo's own pipelining evaluation at up to ~1.2x and calls the gain
+"concentrated in release builds and deep graphs". That number is not transferable, in the optimistic
+direction for once: Cargo already overlaps units within one process and its dependency edges are not
+hard barriers. **Here every unit edge is a derivation boundary — a full stop.** The loss pipelining
+recovers is therefore much larger in this architecture than in Cargo, which is exactly what the 3.2x
+measured parallelism against a 10x budget shows.
+
+### 9.4 Re-ranking
+
+1. **Pipelining (`FASTER.md` Change 1) is now the strongest candidate, not the weakest.** It targets
+   the 107 s path directly, and its +230 derivations (~26 s) are charged to the sum, where the slack
+   is. Prototype it on the five path crates first, not all 320 units.
+2. **Linkers (`FASTER.md` Change 5: mold, wild, rust-lld) drop off the list.** Only 25 build-script
+   bins (tiny), 18 proc-macro dylibs, and **one** real binary link in a cold build. The whole prize
+   is bounded above by `rust_analyzer`'s 14.3 s — which is compile *and* link — so realistically well
+   under 10 s of 133 s. mold is Linux/ELF only (Mach-O support went to the commercial `sold` and was
+   then discontinued), so it cannot even be measured on the platform every number here comes from,
+   and on Linux it would be competing against rust-lld, already the default since 1.90.
+3. **Fewer derivations is still the only lever on the per-derivation tax**, but at 2.5 s on the path
+   it is no longer worth spending anything on.
+
+**Caveat to carry into the prototype:** pipelining raises total CPU work (the frontend runs twice),
+so the win depends on having idle cores. At 10 cores there are seven. On a 4-core CI box the sum
+bound (~495 s / 4 ≈ 124 s) would dominate and the gain would largely vanish. Measure there before
+promising it.
