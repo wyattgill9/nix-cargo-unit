@@ -52,9 +52,8 @@ to, so every spelling above works as written while `nix flake show` and
 `flake.nix` is one call. The pipeline is `../nix`'s, not this file's:
 
 ```nix
-cargoUnit = import (nix-cargo-unit + "/nix") {
+cargoUnit = nix-cargo-unit.lib.mkCargoUnit {
   inherit pkgs rustToolchain;
-  nixCargoUnit = nix-cargo-unit.packages.${system}.nix-cargo-unit;
 };
 
 graph = cargoUnit.buildWorkspace {
@@ -67,10 +66,13 @@ graph = cargoUnit.buildWorkspace {
 };
 ```
 
-`../nix/default.nix` wires `vendor.nix` (Cargo.lock → package-shaped vendor
-tree), `policy.nix` (the quality gates and the linker choice) and `resolve.nix`
-(the one place caller args are defaulted and resolved) into `cargo-unit.nix`,
-which owns the two IFD stages and the unit import:
+`mkCargoUnit` is `../nix`, and it needs only the two things the flake cannot
+decide for a consumer: which nixpkgs, and which Rust toolchain. It builds the
+renderer binary from that `pkgs` itself (`../nix/package.nix`), so nothing here
+indexes an input by system. Behind it, `../nix/workspace.nix` composes
+`vendor.nix` (Cargo.lock → package-shaped vendor tree), `policy.nix` (the
+quality gates, the linker choice and the test-runner settings) and `graph.nix`
+(the two IFD stages):
 
 ```
 Cargo.lock ──> vendorDir ─┐
@@ -129,7 +131,7 @@ the remap is reaching for anyway.
 the stable nixpkgs toolchain is enough and this flake needs no fenix or
 rust-overlay input.
 
-**The toolchain id is the toolchain's store path basename.** `nix/resolve.nix`
+**The toolchain id is the toolchain's store path basename.** `mkCargoUnit`
 derives it, and the renderer salts every unit hash with it, so a nixpkgs bump
 that moves rustc invalidates the graph rather than silently reusing artifacts
 built by a different compiler.

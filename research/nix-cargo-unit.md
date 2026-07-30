@@ -710,10 +710,39 @@ The gap: no test evaluates the emitted Nix. Every assertion is textual (see §19
 
 ## 18. Packaging
 
-`flake.nix` builds the crate with `rustPlatform.buildRustPackage` across four systems, using
-`lib.fileset` to include exactly `Cargo.toml`, `Cargo.lock`, `src`, and `templates` (the last
-because `render.rs` pulls the template in with `include_str!`). It exposes a package, an overlay,
-a dev shell, checks, and `alejandra` as formatter.
+The flake is the only door. A consumer takes the GitHub flakeref and calls one function:
+
+```nix
+inputs.nix-cargo-unit.url = "github:wyattgill9/nix-cargo-unit";
+...
+cargoUnit = nix-cargo-unit.lib.mkCargoUnit {
+  inherit pkgs;
+  rustToolchain = <cargo + rustc, carrying lib/rustlib>;
+};
+graph = cargoUnit.buildWorkspace { src = ./.; workspaceRoot = ./.; };
+```
+
+`lib.mkCargoUnit` is `import ./nix`, and it is deliberately **not** system-indexed: it reads the
+system off the `pkgs` it is handed and builds the renderer from that same nixpkgs
+(`nix/package.nix`, a plain `callPackage`-able derivation), so a consumer never indexes an
+attribute by system and never wires the binary in by hand. The flake input is the version
+selector, which is why there is no seam for substituting a different renderer.
+
+The remaining outputs serve narrower purposes. `packages.<system>.nix-cargo-unit` is the CLI on
+its own, for a shell or a CI step that wants the binary rather than the library — built with
+`rustPlatform.buildRustPackage` across four systems, using `lib.fileset` to include exactly
+`Cargo.toml`, `Cargo.lock`, `src`, and `templates` (the last because `render.rs` pulls the
+template in with `include_str!`). `devShells.<system>.default` is the crate's own dev shell, and
+`formatter` is `alejandra`.
+
+`checks.<system>.library` applies `mkCargoUnit` to this repository's own workspace. Evaluating it
+is most of the check: it resolves the policy schema and the vendor plan, runs both IFD stages, and
+instantiates every unit in the rendered graph, so a break anywhere in the library or the generated
+Nix fails `nix flake check` without compiling a crate. Building it is the rendered `units.nix`.
+
+There is no overlay. The library needs a Rust toolchain argument, so it cannot be a plain
+attribute on a `pkgs`, and an overlay carrying only the CLI would be a second way to reach what
+`packages` already exposes.
 
 `Cargo.toml` declares an **empty `[workspace]`**, with the reason stated: this is the bootstrap tool
 that renders Cargo unit graphs as Nix, so it cannot be built through its own output. Keeping it a

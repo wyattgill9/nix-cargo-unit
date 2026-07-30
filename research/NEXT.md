@@ -51,9 +51,10 @@ compilation on a serial chain. Cold-build parity with cargo is unreachable regar
 
 **Cost: one day. Do it first.** Everything in Stage B rewrites `templates/units.nix.in` and the
 emitters, and the current suite (56 Rust tests) asserts on **substrings of emitted text** — which
-cannot validate a template rewrite and would need rewriting anyway. No test anywhere evaluates
-the generated Nix (`nix eval` / `nix-instantiate` appear nowhere in `src/`, `flake.nix`, or
-`nix/`).
+cannot validate a template rewrite and would need rewriting anyway. The only thing that evaluates
+the generated Nix today is `checks.<system>.library`, which renders this repository's own workspace
+and instantiates every unit in it; nothing asserts on the *shape* of what came out, which is where
+the bug below lives.
 
 The gap is not hypothetical. `render_checked_roots` (`src/render.rs:3131`) joins entries with a
 space into `checkedRoots = [ {{ checked_roots }} ];` (`templates/units.nix.in:856`), so
@@ -68,7 +69,8 @@ checks silently dropped. It was found by reading, not by testing.
 ### A.1 The fixture check
 
 One fixture workspace under `nix/tests/fixture/`, rendered and evaluated as a flake check
-(`flake.nix:72`, currently just `inherit … nix-cargo-unit`):
+alongside the existing `checks.<system>.library` (which covers `render-evaluates` and
+`render-drv` for the repository's own workspace, but asserts nothing about shape):
 
 | Check | Asserts |
 |---|---|

@@ -85,9 +85,10 @@ into the identity hash and the rustc argv. The whole class is structurally absen
 
 The price is paid elsewhere:
 
-- **Nightly required.** `--unit-graph` is `-Z unstable-options`. `nix/resolve.nix` says so at the
-  `rustToolchain` argument, and nixpkgs carries no nightly, so the toolchain source (fenix,
-  rust-overlay) is the consumer's problem. crate2nix runs on stable `cargo metadata`.
+- **Unstable cargo interface.** `--unit-graph` is `-Z unstable-options`, so planning runs with
+  `RUSTC_BOOTSTRAP=1` set inside the planner derivation (`nix/graph.nix`). A stable toolchain is
+  therefore enough, but the flag is gated for a reason and cargo owes no compatibility on either
+  side of it. crate2nix runs on stable `cargo metadata`.
 - **Unstable input schema.** `model.rs` pays for it explicitly: lenient `Lto` / `DebugInfo` /
   `Strip` deserialization accepting every spelling cargo has used, and `UnitMode::Other(String)`
   preserving unknown modes verbatim so a future cargo mode doesn't break `merge`.
