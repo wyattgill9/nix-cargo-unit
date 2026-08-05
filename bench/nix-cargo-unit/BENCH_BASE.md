@@ -27,7 +27,7 @@ Reproduce with:
 
 ```console
 $ git submodule update --init bench/rust-analyzer
-$ nix build "git+file://$PWD?submodules=1&dir=bench"
+$ nix build "git+file://$PWD?submodules=1&dir=bench/nix-cargo-unit"
 ```
 
 Correctness of the artifact under test: `checks.aarch64-darwin.smoke` passes
@@ -199,7 +199,7 @@ The incremental story is dominated by **fan-out, not by unit count**: a `stdx`
 edit rebuilds only 31 of 320 units (9.7%) but costs 127 s — 60% of a full cold
 build — because those 31 units *are* the critical chain.
 
-Confirmed, as `bench/README.md` claims: a source-body edit leaves
+Confirmed, as `bench/nix-cargo-unit/README.md` claims: a source-body edit leaves
 `plannerSource` byte-identical and moves only `unitsNix`, so the whole-workspace
 cargo resolve is skipped and only the ~0.76 s render IFD re-runs.
 

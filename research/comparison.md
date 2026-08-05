@@ -2,7 +2,7 @@
 
 A structured comparison against the closest prior art. Sources: `research/nix-cargo-unit.md`
 (this repo's internals), `research/crate2nix.md` (crate2nix as of v0.15.0, 2026-01-28), and
-`bench/BENCH_BASE.md` (measured, 2026-07-28).
+`bench/nix-cargo-unit/BENCH_BASE.md` (measured, 2026-07-28).
 
 ## TL;DR
 
@@ -243,7 +243,7 @@ JSON output); nix-cargo-unit's `units.nix` is **2.6 MB** for 320 units.
 
 ## 8. Measured performance
 
-crate2nix publishes no benchmark numbers. nix-cargo-unit does (`bench/BENCH_BASE.md`, rust-analyzer
+crate2nix publishes no benchmark numbers. nix-cargo-unit does (`bench/nix-cargo-unit/BENCH_BASE.md`, rust-analyzer
 release build, Apple M5 10-core, `max-jobs=10`, `sandbox=false`, CA off):
 
 | | |

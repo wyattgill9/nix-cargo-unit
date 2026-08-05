@@ -1,6 +1,6 @@
-# `bench/tools` — the profiling harness
+# `bench/nix-cargo-unit/tools` — the profiling harness
 
-The scripts that produced `bench/PROFILE.md`. They exist because the two
+The scripts that produced `bench/nix-cargo-unit/PROFILE.md`. They exist because the two
 measurement documents that came before it disagreed by an order of magnitude
 about per-derivation overhead, and the disagreement was only resolvable by
 instrumenting the real build instead of extrapolating from synthetic probes.
@@ -13,10 +13,10 @@ hash while leaving existing outputs in place.
 
 ```console
 $ git submodule update --init --depth 1 bench/rust-analyzer
-$ nix flake update nix-cargo-unit --flake ./bench   # if bench/flake.lock is stale
+$ nix flake update nix-cargo-unit --flake ./bench/nix-cargo-unit   # if bench/nix-cargo-unit/flake.lock is stale
 ```
 
-Add the salt seam to `bench/flake.nix` (one line, reverted afterwards):
+Add the salt seam to `bench/nix-cargo-unit/flake.nix` (one line, reverted afterwards):
 
 ```nix
 name = "cargo-unit-rust-toolchain-${pkgs.rustc.version}${builtins.getEnv "NCU_SALT"}";
@@ -29,8 +29,8 @@ byte-identical, so the seam can be left in place without moving any hash.
 
 ```console
 $ export NCU_SALT=-prof1
-$ FLAKE="git+file://$PWD?submodules=1&dir=bench"
-$ python3 bench/tools/build_prof.py /tmp/prof/run1 \
+$ FLAKE="git+file://$PWD?submodules=1&dir=bench/nix-cargo-unit"
+$ python3 bench/nix-cargo-unit/tools/build_prof.py /tmp/prof/run1 \
     nix build --impure --log-format internal-json -v --no-link \
     "$FLAKE#packages.aarch64-darwin.workspace"
 ```
@@ -44,9 +44,9 @@ stamped on arrival.
 ## 2. Attribute it
 
 ```console
-$ python3 bench/tools/analyze.py /tmp/prof run1     # per kind and per stdenv phase
-$ python3 bench/tools/critpath.py /tmp/prof run1    # weighted critical path
-$ python3 bench/tools/mechanism.py /tmp/prof run1   # does overhead scale with inputs?
+$ python3 bench/nix-cargo-unit/tools/analyze.py /tmp/prof run1     # per kind and per stdenv phase
+$ python3 bench/nix-cargo-unit/tools/critpath.py /tmp/prof run1    # weighted critical path
+$ python3 bench/nix-cargo-unit/tools/mechanism.py /tmp/prof run1   # does overhead scale with inputs?
 ```
 
 `analyze.py` is where the two non-obvious parsing rules live, and both matter:
@@ -62,9 +62,9 @@ $ python3 bench/tools/mechanism.py /tmp/prof run1   # does overhead scale with i
 ## 3. Split rustc's own time
 
 ```console
-$ python3 bench/tools/rustc_split.py /tmp/prof/split "$TOOLCHAIN/bin" \
+$ python3 bench/nix-cargo-unit/tools/rustc_split.py /tmp/prof/split "$TOOLCHAIN/bin" \
     hir_ty /nix/store/…-hir_ty-0.0.0.drv 1
-$ python3 bench/tools/parse_passes.py /tmp/prof
+$ python3 bench/nix-cargo-unit/tools/parse_passes.py /tmp/prof
 ```
 
 Replays a unit's exact `rustc` invocation outside Nix, three ways: full `--emit`,
@@ -80,7 +80,7 @@ the backend's wall time, so they are reported as a breakdown inside
 ## 4. Per-derivation overhead
 
 ```console
-$ bench/tools/probe_run.sh > /tmp/prof/probe.tsv
+$ bench/nix-cargo-unit/tools/probe_run.sh > /tmp/prof/probe.tsv
 ```
 
 Three arms (`minimal` plain `derivation`, `plain` + `__structuredAttrs`,
@@ -96,7 +96,7 @@ Every probe's builder is verified to have run (a plain `derivation` has no
 ## 5. Predict before building
 
 ```console
-$ python3 bench/tools/simulate.py /tmp/prof run1 10
+$ python3 bench/nix-cargo-unit/tools/simulate.py /tmp/prof run1 10
 ```
 
 A greedy list scheduler over the measured DAG. It is **first validated** against

@@ -4,11 +4,12 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     # Relative, so it resolves against whatever tree this flake was fetched
-    # from — `git+file://$PWD?submodules=1&dir=bench` lands on the repository
-    # root and keeps the submodule. `path:$PWD/bench` would make a standalone
-    # store copy of this directory, and `..` would then resolve to `/nix`.
+    # from — `git+file://$PWD?submodules=1&dir=bench/nix-cargo-unit` lands on
+    # the repository root and keeps the submodule. `path:$PWD/bench/nix-cargo-unit`
+    # would make a standalone store copy of this directory, and `../..` would
+    # then resolve outside it.
     nix-cargo-unit = {
-      url = "path:..";
+      url = "path:../..";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -34,9 +35,11 @@
     # gitlinks without `submodules=1`. Checked here so the failure names the two
     # commands that fix it, instead of surfacing a hundred lines later as cargo
     # refusing to open a manifest that is not there.
+    # The checkout lives one level up, at `bench/rust-analyzer`, because both
+    # this bench and the buck2 bench build the same tree.
     workspaceSrc =
-      if builtins.pathExists (./rust-analyzer + "/Cargo.toml")
-      then ./rust-analyzer
+      if builtins.pathExists (../rust-analyzer + "/Cargo.toml")
+      then ../rust-analyzer
       else
         throw ''
           bench/rust-analyzer is empty: the rust-analyzer submodule is not visible to this flake.
@@ -45,10 +48,10 @@
               git submodule update --init bench/rust-analyzer
 
           Then build with a flakeref that carries submodules:
-              nix build "git+file://$PWD?submodules=1&dir=bench"
+              nix build "git+file://$PWD?submodules=1&dir=bench/nix-cargo-unit"
 
-          `nix build ./bench` alone resolves to a plain `git+file://` fetch of the
-          repository, which drops every gitlink.
+          `nix build ./bench/nix-cargo-unit` alone resolves to a plain
+          `git+file://` fetch of the repository, which drops every gitlink.
         '';
 
     # Everything this bench builds, per system: what
@@ -176,9 +179,9 @@
     # against `packages.<system>` first and `legacyPackages.<system>` second, so
     # individual compile units and per-target sets keep their short spellings:
     #
-    #     nix build ./bench#units.'"syntax-0.0.0-<hash>"'
-    #     nix build ./bench#libraries.syntax
-    #     nix build ./bench#targetSets.'"0"'.binaries.rust-analyzer
+    #     nix build ./bench/nix-cargo-unit#units.'"syntax-0.0.0-<hash>"'
+    #     nix build ./bench/nix-cargo-unit#libraries.syntax
+    #     nix build ./bench/nix-cargo-unit#targetSets.'"0"'.binaries.rust-analyzer
     legacyPackages = forAllSystems benchFor;
 
     checks = forAllSystems (
