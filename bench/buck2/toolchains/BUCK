@@ -1,86 +1,34 @@
-# The toolchains buck2 builds rust-analyzer with, resolved from Nix rather than
-# from `$PATH`.
+# The four toolchains buck2's rust rules actually reach for, rather than
+# `system_demo_toolchains()`: the demo set additionally declares android, java,
+# kotlin, go, ocaml, haskell and erlang, and hardcodes a `java_home` that does
+# not exist here.
 #
-# `flake.package()` is a rule: it runs `nix build path:<flake>#packages.<system>.<pkg>`
-# as a build action and hands the resulting store path to the toolchain rule as a
-# dependency. The compiler is therefore an input to the build graph, named by
-# store path, the same way a source file is — which is what the `system_*`
-# toolchains this replaces could not do. Those resolve `rustc`, `clang` and
-# `python3` by name on `$PATH` at action time, which left the devShell as the
-# only thing deciding which compiler ran and nothing inside buck2 able to notice
-# that it had changed.
-#
-# `genrule` stays a `system_*` toolchain: it runs `/bin/sh`, which is not
-# something Nix supplies, and buck2.nix has no rule for it. `cxx` is assembled
-# from the prelude and one local rule rather than from buck2.nix's
-# `nix_cxx_toolchain`, which no longer analyses against this prelude — see
-# `cxx.bzl`.
+# "system" means "whatever is on `$PATH`" — `rustc`, `clang`, `python3`. The
+# devShell in `../flake.nix` is what puts the pinned ones there; see
+# ../README.md on why the pin matters.
 
-load("@nix//flake.bzl", "flake")
-load("@nix//toolchains:python.bzl", "nix_python_bootstrap_toolchain")
-load("@nix//toolchains:rust.bzl", "nix_rust_toolchain")
-load("@prelude//toolchains:cxx.bzl", "cxx_tools_info_toolchain")
+load("@prelude//toolchains:cxx.bzl", "system_cxx_toolchain")
 load("@prelude//toolchains:genrule.bzl", "system_genrule_toolchain")
-load(":cxx.bzl", "nix_cxx_tools")
+load("@prelude//toolchains:python.bzl", "system_python_bootstrap_toolchain")
+load("@prelude//toolchains:rust.bzl", "system_rust_toolchain")
 
-_FLAKE = "root//buck2:flake"
-
-### Packages #######################################
-
-# `rustdoc` rides along in the same package as a sub-target: nixpkgs' rustc
-# wrapper carries both binaries.
-flake.package(
-    name = "rustc",
-    binaries = ["rustdoc"],
-    binary = "rustc",
-    path = _FLAKE,
+system_cxx_toolchain(
+    name = "cxx",
+    visibility = ["PUBLIC"],
 )
 
-# Required by `nix_rust_toolchain` whether or not anything asks for a lint run.
-# Nothing here does — this bench measures build time, not rust-analyzer's lint
-# cleanliness, which is also why `reindeer.toml` picks the `cargo.*` macros.
-flake.package(
-    name = "clippy",
-    binary = "clippy-driver",
-    path = _FLAKE,
+system_genrule_toolchain(
+    name = "genrule",
+    visibility = ["PUBLIC"],
 )
 
-# The compiler drivers and the archiver, with cc-wrapper's `$NIX_*` variables
-# baked into the two wrappers. See the `cxx` derivation in `../flake.nix` for
-# why that baking is necessary here and was not before.
-#
-# Only the three tools something actually reaches for. The package holds `nm`,
-# `objcopy`, `ranlib` and `strip` as well, and buck2.nix's example lists all
-# seven, but the prelude fills `BinaryUtilitiesInfo` from `$PATH` by name no
-# matter what a `CxxToolsInfo` says — so naming them here would suggest a pin
-# that does not exist. Nothing in this build invokes them: a clean build
-# succeeds on a `$PATH` with no `objcopy` on it at all.
-flake.package(
-    name = "nix_cc",
-    binaries = [
-        "ar",
-        "cc",
-        "c++",
-    ],
-    package = "cxx",
-    path = _FLAKE,
+system_python_bootstrap_toolchain(
+    name = "python_bootstrap",
+    visibility = ["PUBLIC"],
 )
 
-# The prelude's internal tools are python scripts.
-flake.package(
-    name = "python",
-    binary = "python3",
-    package = "python3",
-    path = _FLAKE,
-)
-
-### Toolchains #####################################
-
-nix_rust_toolchain(
+system_rust_toolchain(
     name = "rust",
-    clippy = ":clippy",
-    rustc = ":rustc",
-    rustdoc = ":rustc[rustdoc]",
     # Cargo's `release` profile, spelled as rustc flags, because that is what
     # the nix-cargo-unit bench builds and the two numbers are only comparable if
     # rustc is invoked the same way. buck2 has no notion of a cargo profile: it
@@ -102,27 +50,5 @@ nix_rust_toolchain(
     # Only consulted for a target that does not state its own edition. Every
     # target reindeer emits states one, so this is dead weight the rule requires.
     default_edition = "2021",
-    visibility = ["PUBLIC"],
-)
-
-nix_cxx_tools(
-    name = "nix_cc_tools",
-    nix_cc = ":nix_cc",
-)
-
-cxx_tools_info_toolchain(
-    name = "cxx",
-    cxx_tools_info = ":nix_cc_tools",
-    visibility = ["PUBLIC"],
-)
-
-nix_python_bootstrap_toolchain(
-    name = "python_bootstrap",
-    python = ":python",
-    visibility = ["PUBLIC"],
-)
-
-system_genrule_toolchain(
-    name = "genrule",
     visibility = ["PUBLIC"],
 )
