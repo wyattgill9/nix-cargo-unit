@@ -10,6 +10,7 @@ comparison only means anything if both sides compile the *same* source at the
 | `nix-cargo-unit/` | this repository's bench: one Nix derivation per Cargo compilation unit. Measured; see its README. |
 | `buck2/` | the buck2 bench: `reindeer buckify` over the same lockfile, one buck2 action per crate. Measured; see its README. |
 | `.buckconfig`, `BUCK` | buck2's cell root and its generated package. They are here rather than in `buck2/` because a buck2 cell cannot name sources outside itself, and `rust-analyzer/` is `buck2/`'s sibling. `BUCK` is generated and gitignored. |
+| `nix` | not a directory: the mount point `.buckconfig` gives [tweag/buck2.nix](https://github.com/tweag/buck2.nix), which buck2 fetches and caches itself. It is what lets the buck2 side name its compilers as Nix store paths. |
 | `fixups/` | a symlink to `buck2/fixups/`; reindeer only looks for fixups next to the generated `BUCK`. |
 
 Populate the shared checkout once, before running either side:
@@ -31,5 +32,5 @@ name the same submodule revision, so each side records it.
 
 Both sides pin the same nixpkgs revision, and so the same rustc: the nix bench
 through `nix-cargo-unit/flake.lock`, the buck2 bench through `buck2/flake.nix`,
-whose devShell is the only thing deciding which `rustc` buck2's system toolchain
-finds. Move them together.
+whose `packages` output *is* the toolchain buck2 compiles with — buck2 builds it
+with `nix build`, as an action, and names it by store path. Move them together.

@@ -3,6 +3,15 @@
 Both benches, same submodule revision, same rustc, same machine, one sitting.
 Measured 2026-08-05 after a full `nix-collect-garbage -d`.
 
+> **These numbers predate the buck2 side's toolchain overhaul**, made later the
+> same day: its `system_*` toolchains were replaced with
+> [tweag/buck2.nix](https://github.com/tweag/buck2.nix), so its compilers are
+> now buck2 targets named by store path rather than names looked up on `$PATH`.
+> Both bugs in "Two bugs this found" are fixed by that change rather than by the
+> patches described below, and `buck2/README.md` carries re-measured
+> single-side figures. The table here is left as measured: re-running only the
+> buck2 column would break the one-sitting property that makes it a comparison.
+
 ## Answer
 
 **buck2 wins every incremental case. nix-cargo-unit wins the cold build.**
@@ -64,20 +73,28 @@ parses to `SOURCE_FILE@0..30`. nix's closure is 91.6 MiB over 2 store paths.
 
 ## Two bugs this found
 
+Both were fixed the same day by moving the buck2 side to buck2.nix, which is a
+different fix than the one recorded here; the descriptions are kept because they
+are why that move happened.
+
 **`bench/buck2/flake.nix` was never hermetic.** Every binary target links
 `-liconv`; nothing in the devShell declared it. It worked only because some
 unrelated derivation kept libiconv alive in the store. The GC removed it and all
-6 binary targets failed with `ld: library not found for -liconv`. Fixed by
-adding `libiconv` to `buildInputs` — it must be `buildInputs`, not `packages`,
-because cc-wrapper's buildInputs hook is what puts `-L` into `$NIX_LDFLAGS`.
-The nix-cargo-unit side never had this: libiconv is one of the two paths in its
-LSP binary's closure.
+6 binary targets failed with `ld: library not found for -liconv`. Fixed first by
+adding `libiconv` to the devShell's `buildInputs` — it must be `buildInputs`,
+not `packages`, because cc-wrapper's buildInputs hook is what puts `-L` into
+`$NIX_LDFLAGS`. That worked only for as long as the link inherited the shell's
+environment; it is now declared on the `cxx` package the linker itself comes
+from. The nix-cargo-unit side never had this: libiconv is one of the two paths
+in its LSP binary's closure.
 
-**The toolchain pin is weaker than documented.** `buck2/README.md` says the
-devShell is the pin. It is really *the devShell the running daemon was spawned
+**The toolchain pin is weaker than documented.** `buck2/README.md` said the
+devShell is the pin. It was really *the devShell the running daemon was spawned
 from* — buck2 captures its environment at daemon start and hands that to every
-action. A corrected shell with a stale daemon still builds with the old
-environment. `buck2 killall` is required after any environment change.
+action, so a corrected shell with a stale daemon still built with the old
+environment and `buck2 killall` was required after any change to it. This is the
+bug that motivated the overhaul: the compiler is now a build input, so buck2
+notices when it changes, and no environment carries it.
 
 ## Caveats
 
@@ -116,5 +133,8 @@ $ buck2 build $(buck2 uquery "attrregexfilter('crate_root', '^rust-analyzer/', /
 ```
 
 Edit scenarios append one comment line to `crates/<crate>/src/lib.rs` and
-rebuild the same root set. Restore the file between runs with `cp` from a
-pristine copy, not `git` — inside the devShell `/usr/bin/git` fails.
+rebuild the same root set, restoring the file between runs.
+
+The `git` caveat below no longer applies: the devShell carries `pkgs.git`, which
+buck2 needs anyway to fetch the buck2.nix cell, so `/usr/bin/git`'s xcrun shim
+is no longer what a restore step resolves to.

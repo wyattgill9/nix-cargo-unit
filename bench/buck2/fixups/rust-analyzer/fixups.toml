@@ -1,1 +1,18 @@
-buildscript.run = true
+# `build.rs` runs `git log -1` and bakes the result into `--version`. It runs in
+# a buck2 action directory, which is under `buck-out/`, which is inside *this*
+# repository — so the rev it finds is nix-cargo-unit's, not the submodule's.
+# Wrong on its own, and worse than wrong for a bench: no action key covers the
+# enclosing repository's HEAD, so buck2 caches the string and every later commit
+# makes it stale.
+#
+# The nix-cargo-unit side compiles this crate with no git and no `.git` in
+# reach, so the script gives up and the binary reports a bare
+# `rust-analyzer 0.0.0`. This makes the same thing true here.
+#
+# It only became visible with buck2.nix: fetching that cell needs `git` in the
+# devShell, and until there was one, macOS's `/usr/bin/git` xcrun shim died in
+# the shell and the script gave up for the wrong reason. Nothing about the
+# change caused this — a Linux host, or a Mac with the Xcode tools, was always
+# building a binary that named the wrong revision.
+[buildscript.run]
+env = {GIT_DIR = "/nonexistent"}

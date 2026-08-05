@@ -8,6 +8,7 @@
   root = .
   prelude = prelude
   toolchains = buck2/toolchains
+  nix = nix
   none = none
 
 [cell_aliases]
@@ -18,10 +19,25 @@
   fbcode_macros = none
   buck = none
 
-# The prelude bundled with the buck2 binary, rather than a vendored copy. It is
-# version-matched to the binary by construction, which is one fewer pin to move.
+# `prelude` is the one bundled with the buck2 binary, rather than a vendored
+# copy: it is version-matched to the binary by construction, which is one fewer
+# pin to move.
+#
+# `nix` is tweag/buck2.nix, which supplies `flake.package()` and the three
+# `nix_*_toolchain` rules `buck2/toolchains/BUCK` uses. buck2 clones it itself
+# and caches it, so neither cell is a path in this tree — `nix = nix` above is a
+# mount point, not a directory.
 [external_cells]
   prelude = bundled
+  nix = git
+
+# Pinned by hand, because buck2 resolves this cell before any flake is read and
+# so cannot be told a revision by Nix. It moves on its own schedule; nothing
+# about the comparison depends on it, since the toolchains it builds are pinned
+# in `buck2/flake.nix`.
+[external_cell_nix]
+  git_origin = https://github.com/tweag/buck2.nix.git
+  commit_hash = 038b031b84846101030b9d081445003e82e3be5c
 
 [parser]
   target_platform_detector_spec = target:root//...->prelude//platforms:default

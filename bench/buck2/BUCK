@@ -1,0 +1,17 @@
+# The flake in this directory, as a buck2 source. `toolchains/BUCK` hands this
+# to `flake.package()`, which materialises the two files into a directory and
+# runs `nix build path:<that directory>#packages.<system>.<name>` on it.
+#
+# Only the two files a flake needs are listed: a flake evaluated from `path:` is
+# copied into the store first, so anything else in this directory would be
+# copied with it and would make the toolchain's identity depend on, among other
+# things, this README.
+
+filegroup(
+    name = "flake",
+    srcs = [
+        "flake.lock",
+        "flake.nix",
+    ],
+    visibility = ["toolchains//..."],
+)
