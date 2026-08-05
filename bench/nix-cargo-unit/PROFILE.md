@@ -11,7 +11,7 @@ extrapolated from synthetic probe derivations. Where a synthetic probe is still
 the right tool (§5) it is run in three arms and at two parallelism levels —
 because one arm at one parallelism is what produced the contradiction.
 
-Harness: `bench/tools/` (see its README). Nothing here deletes from the store.
+Harness: `bench/nix-cargo-unit/tools/` (see its README). Nothing here deletes from the store.
 
 ---
 
@@ -20,7 +20,7 @@ Harness: `bench/tools/` (see its README). Nothing here deletes from the store.
 ### 0.1 The benchmark does not build at `HEAD`
 
 Commit `39a8eda` added the `advisory-db` input to the root `flake.nix` but did not
-update `bench/flake.lock`, which still locks `nix-cargo-unit` with `nixpkgs` as its
+update `bench/nix-cargo-unit/flake.lock`, which still locks `nix-cargo-unit` with `nixpkgs` as its
 only input:
 
 ```
@@ -28,7 +28,7 @@ error: function 'outputs' called without required argument 'advisory-db'
        at flake.nix:19:13
 ```
 
-Every measurement below required `nix flake update nix-cargo-unit --flake ./bench`
+Every measurement below required `nix flake update nix-cargo-unit --flake ./bench/nix-cargo-unit`
 first. **A baseline that cannot be run is not a baseline.** Highest-priority fix,
 and it is a lockfile regeneration (§10.1).
 
@@ -78,7 +78,7 @@ correctly. `NEXT.md` §8.5 claims it fixed. It is not fixed.
 | Nix settings | `max-jobs = 10`, `cores = 0`, `sandbox = false`, **`lazy-trees = true`** |
 | nixpkgs | `624af665418d3c65d544145b4d34ad696439570e` (same as `BENCH_BASE.md`) |
 | Toolchain | rustc 1.97.0 / cargo 1.97.0 |
-| `nix-cargo-unit` | `3c61bb9` + regenerated `bench/flake.lock` |
+| `nix-cargo-unit` | `3c61bb9` + regenerated `bench/nix-cargo-unit/flake.lock` |
 | rust-analyzer | submodule `bec66814323579659ffd77c909b3d963af118ece` |
 
 `lazy-trees = true` is **not** in `BENCH_BASE.md`'s settings table. It is on here.
@@ -88,7 +88,7 @@ worth closing before the two documents' `plannerSource` and eval figures are
 compared again.
 
 **How the rebuild was forced.** Rather than `nix store delete` the 320 outputs, the
-toolchain id is salted — `bench/flake.nix`'s `symlinkJoin` name gains a suffix from
+toolchain id is salted — `bench/nix-cargo-unit/flake.nix`'s `symlinkJoin` name gains a suffix from
 `NCU_SALT` — which moves every unit hash and forces a full rebuild while leaving
 the store intact. With the variable empty the derivation path is byte-identical
 (verified: `lgxcx091…-rust-analyzer-workspace.drv` either way). Vendoring and

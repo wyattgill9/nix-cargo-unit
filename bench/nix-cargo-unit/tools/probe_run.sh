@@ -12,8 +12,8 @@
 #   flakeref defaults to this repository's bench flake with submodules.
 set -uo pipefail
 SP="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$SP/../.." && pwd)"
-FLAKE="${1:-git+file://$REPO?submodules=1&dir=bench}"
+REPO="$(cd "$SP/../../.." && pwd)"
+FLAKE="${1:-git+file://$REPO?submodules=1&dir=bench/nix-cargo-unit}"
 
 # Resolve nixpkgs to a store path once, so each probe build is a plain --expr
 # with no flake or network resolution inside the measured region.

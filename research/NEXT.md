@@ -1,12 +1,12 @@
 # `NEXT.md` — what the benchmarks say, and what to do next
 
-Written **2026-07-29** against `de0ffac`. Sources: `bench/BENCH_BASE.md` (baseline,
-2026-07-28), `bench/PROFILE.md` (deep profile, 2026-07-29), `bench/tools/` (the
+Written **2026-07-29** against `de0ffac`. Sources: `bench/nix-cargo-unit/BENCH_BASE.md` (baseline,
+2026-07-28), `bench/nix-cargo-unit/PROFILE.md` (deep profile, 2026-07-29), `bench/nix-cargo-unit/tools/` (the
 harness), and the tree itself.
 
 This file supersedes the deleted `research/NEXT.md` and `research/FASTER.md`
 (removed in `de0ffac` as outdated). Where those documents are cited below it is
-only through `bench/PROFILE.md`'s corrections ledger, which is the record of why
+only through `bench/nix-cargo-unit/PROFILE.md`'s corrections ledger, which is the record of why
 they were retracted.
 
 ## TL;DR
@@ -147,7 +147,7 @@ because of this exact error.
    single `nix_list` emitter that parenthesises every element (there are six join
    sites), plus an evaluation check asserting element *counts and types*.
 
-2. **Put the bench in CI.** `bench/flake.lock` was stale enough that the benchmark
+2. **Put the bench in CI.** `bench/nix-cargo-unit/flake.lock` was stale enough that the benchmark
    could not be evaluated at all until it was regenerated in `d2ef272`; a baseline
    that cannot be run is not a baseline. At minimum, evaluate `#workspace` and run
    `checks.smoke`.
@@ -362,7 +362,7 @@ every rule is attached to an error that actually happened here.
 
 ## 5. The benchmarking policy this implies
 
-From `bench/PROFILE.md` §11, restated because it governs every future measurement
+From `bench/nix-cargo-unit/PROFILE.md` §11, restated because it governs every future measurement
 in this repository:
 
 1. A benchmark that cannot be run is not a baseline. `bench/` must build in CI.
@@ -391,7 +391,7 @@ in this repository:
   under the single largest hole in the data.
 - **No incremental profile.** The project exists for incrementality, and the only
   incremental data (`BENCH_BASE.md` §6) is solo-timed — which §4 just proved is
-  worth up to 3.6× of error. Pointing `bench/tools/`'s phase-level harness at a
+  worth up to 3.6× of error. Pointing `bench/nix-cargo-unit/tools/`'s phase-level harness at a
   `stdx` edit is the most valuable single measurement still missing.
 - **Content addressing / early cutoff is completely unmeasured.** The bench runs
   `contentAddressed = false`, so early cutoff — arguably the strongest structural
