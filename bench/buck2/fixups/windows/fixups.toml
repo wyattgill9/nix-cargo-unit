@@ -1,0 +1,4 @@
+# See windows-future/fixups.toml. `windows` is only reachable through
+# `process-wrap`'s `cfg(windows)` dependency, but reindeer emits it
+# unconditionally and it drags the incompatible `windows-future` in with it.
+target_compatible_with = ["prelude//os/constraints:windows"]

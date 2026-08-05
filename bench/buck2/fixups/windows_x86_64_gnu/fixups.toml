@@ -1,0 +1,3 @@
+# Emits `cargo:rustc-link-lib` for a Windows import library. Nothing here builds
+# for Windows, so the crate is never compiled and the script has nothing to say.
+buildscript.run = false

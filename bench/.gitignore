@@ -1,0 +1,4 @@
+# `reindeer -c buck2/reindeer.toml buckify` writes the root package here, from
+# the submodule's Cargo.lock, so it is not checked in.
+/BUCK
+/buck-out

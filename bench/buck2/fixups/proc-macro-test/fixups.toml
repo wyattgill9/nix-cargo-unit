@@ -1,0 +1,9 @@
+# A test fixture: `proc-macro-srv` takes it as a dev-dependency and nothing else
+# refers to it, so `cargo build --workspace` never compiles it and neither
+# should this. Reindeer emits it regardless, because `cargo metadata`'s resolve
+# includes dev-dependencies.
+#
+# It would not build if it tried: the build script shells out to `$CARGO` to
+# compile a proc macro out-of-band, and prelude sets `CARGO=/bin/false`, which
+# on macOS is not a path that exists.
+omit_targets = ["proc_macro_test", "build-script-build"]

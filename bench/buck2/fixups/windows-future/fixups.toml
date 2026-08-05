@@ -1,0 +1,2 @@
+# Windows-only crate; see inotify/fixups.toml for why this is needed at all.
+target_compatible_with = ["prelude//os/constraints:windows"]

@@ -1,0 +1,5 @@
+# Linux-only crate, reached only through a `cfg(target_os = "linux")`
+# dependency. Without this, `buck2 build //...` on any other host tries to
+# compile it anyway, because reindeer emits every crate in the resolve as an
+# unconditional target.
+target_compatible_with = ["prelude//os/constraints:linux"]

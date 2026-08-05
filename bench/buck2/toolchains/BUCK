@@ -1,0 +1,54 @@
+# The four toolchains buck2's rust rules actually reach for, rather than
+# `system_demo_toolchains()`: the demo set additionally declares android, java,
+# kotlin, go, ocaml, haskell and erlang, and hardcodes a `java_home` that does
+# not exist here.
+#
+# "system" means "whatever is on `$PATH`" — `rustc`, `clang`, `python3`. The
+# devShell in `../flake.nix` is what puts the pinned ones there; see
+# ../README.md on why the pin matters.
+
+load("@prelude//toolchains:cxx.bzl", "system_cxx_toolchain")
+load("@prelude//toolchains:genrule.bzl", "system_genrule_toolchain")
+load("@prelude//toolchains:python.bzl", "system_python_bootstrap_toolchain")
+load("@prelude//toolchains:rust.bzl", "system_rust_toolchain")
+
+system_cxx_toolchain(
+    name = "cxx",
+    visibility = ["PUBLIC"],
+)
+
+system_genrule_toolchain(
+    name = "genrule",
+    visibility = ["PUBLIC"],
+)
+
+system_python_bootstrap_toolchain(
+    name = "python_bootstrap",
+    visibility = ["PUBLIC"],
+)
+
+system_rust_toolchain(
+    name = "rust",
+    # Cargo's `release` profile, spelled as rustc flags, because that is what
+    # the nix-cargo-unit bench builds and the two numbers are only comparable if
+    # rustc is invoked the same way. buck2 has no notion of a cargo profile: it
+    # has one toolchain-wide flag list, so this is where the profile goes.
+    #
+    #   opt-level=3  debuginfo=0  codegen-units=16
+    #   debug-assertions=no  overflow-checks=no  panic=unwind
+    #
+    # `lto=false` and `incremental=false` are cargo's release defaults and also
+    # rustc's, so they are left unsaid.
+    rustc_flags = [
+        "-Copt-level=3",
+        "-Cdebuginfo=0",
+        "-Ccodegen-units=16",
+        "-Cdebug-assertions=no",
+        "-Coverflow-checks=no",
+        "-Cpanic=unwind",
+    ],
+    # Only consulted for a target that does not state its own edition. Every
+    # target reindeer emits states one, so this is dead weight the rule requires.
+    default_edition = "2021",
+    visibility = ["PUBLIC"],
+)
