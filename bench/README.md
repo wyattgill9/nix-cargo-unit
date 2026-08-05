@@ -27,6 +27,7 @@ name the same submodule revision, so each side records it.
 - [`nix-cargo-unit/PROFILE.md`](nix-cargo-unit/PROFILE.md) — the deep profile
 - [`nix-cargo-unit/tools/`](nix-cargo-unit/tools/README.md) — the profiling harness (Nix-specific: it parses `nix build --log-format internal-json`)
 - [`buck2/README.md`](buck2/README.md) — how to build it, and the headline numbers
+- [`comparison.md`](comparison.md) — both sides measured head to head, same sitting
 
 Both sides pin the same nixpkgs revision, and so the same rustc: the nix bench
 through `nix-cargo-unit/flake.lock`, the buck2 bench through `buck2/flake.nix`,

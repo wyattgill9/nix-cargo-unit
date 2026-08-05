@@ -47,6 +47,21 @@
           pkgs.clang
           pkgs.python3
         ];
+
+        # Every binary here links `-liconv`, and nothing else in this shell pulls
+        # it in: `clang` above is the compiler, not a libc closure. It has to be
+        # `buildInputs` rather than `packages`, because it is cc-wrapper's
+        # buildInputs hook that puts `-L<libiconv>/lib` into `$NIX_LDFLAGS`,
+        # which is the only way the linker buck2 invokes ever hears about it.
+        #
+        # This was latent for as long as some unrelated derivation happened to
+        # keep libiconv alive in the store: the link picked it up from the
+        # ambient store rather than from anything this flake declares. A
+        # `nix-collect-garbage -d` removes it and every binary target fails with
+        # `ld: library not found for -liconv`. The nix-cargo-unit bench never had
+        # the bug — libiconv is a declared runtime dependency there, and is one
+        # of the two paths in the LSP binary's closure.
+        buildInputs = [pkgs.libiconv];
       };
     });
 
