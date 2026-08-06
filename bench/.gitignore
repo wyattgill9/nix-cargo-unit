@@ -2,3 +2,9 @@
 # the submodule's Cargo.lock, so it is not checked in.
 /BUCK
 /buck-out
+
+# `buck2/flake.nix` writes the toolchain store paths here on `nix develop`.
+# Machine- and revision-specific by construction, so it is generated, never
+# committed. It sits in the toolchains cell because buckconfig is per-cell and
+# that is the cell whose `BUCK` reads it.
+/buck2/toolchains/.buckconfig.local

@@ -8,8 +8,9 @@ different build system holding the graph.
 | `reindeer.toml` | the whole benchmark: one `reindeer buckify` config |
 | `fixups/` | 34 two-line files telling reindeer what to do with a build script |
 | `macros/reindeer.bzl` | one macro, to drop a class of rule reindeer emits that has no consumer here |
-| `toolchains/BUCK` | the four system toolchains buck2's rust rules reach for |
-| `flake.nix` | a devShell, and the *only* thing pinning which rustc gets used |
+| `toolchains/BUCK` | the four toolchains buck2's rust rules reach for, named by Nix store path |
+| `toolchains/rust_nix.bzl` | a rust toolchain rule that takes a compiler path, which the prelude's does not |
+| `flake.nix` | a devShell, and the source of every toolchain path buck2 reads |
 | `../rust-analyzer/` | a **git submodule** of `rust-lang/rust-analyzer`, untouched — shared with the nix-cargo-unit bench |
 | `../BUCK` | generated, gitignored. 464 KB, 651 rule calls |
 | `../.buckconfig` | the cell root, which cannot live in this directory. See below |
@@ -20,9 +21,9 @@ and third-party alike, into one generated package.
 
 ## Build it
 
-The submodule has to be checked out, and everything runs inside the devShell —
-buck2's rust toolchain is *whatever `rustc` is on `$PATH`*, so the shell is not
-a convenience, it is the toolchain pin:
+The submodule has to be checked out, and everything runs inside the devShell.
+Entering it is what writes `toolchains/.buckconfig.local`, the generated file
+holding the store path of every compiler buck2 invokes:
 
 ```console
 $ git submodule update --init bench/rust-analyzer
@@ -149,14 +150,34 @@ is where `-Copt-level=3 -Cdebuginfo=0 -Ccodegen-units=16 -Cdebug-assertions=no
 `profile = "release"`; without this the two are not compiling the same thing.
 
 **`flake.nix` pins nixpkgs to the revision `../nix-cargo-unit/flake.lock`
-resolves to** — `624af66`, rustc 1.97.0. `system_rust_toolchain` resolves `rustc`
-from `$PATH` when the action runs, so there is no in-band pin to check: the
-devShell is the pin. Move it when the other bench's lock moves.
+resolves to** — `624af66`, rustc 1.97.0. Move it when the other bench's lock
+moves.
+
+**The toolchains are named by store path, not resolved from `$PATH`.** Entering
+the devShell writes `toolchains/.buckconfig.local`, and `toolchains/BUCK` reads
+every compiler path out of it with `read_config`. A store path is already a
+content hash, so moving `flake.lock` changes those values and buck2 invalidates
+everything that read them — the compiler is part of the cache key rather than an
+ambient property of the shell. `buck2 build` succeeds with no `rustc` on `$PATH`
+at all.
+
+Two things this costs. `system_rust_toolchain` hardcodes `RunInfo(args =
+["rustc"])` and exposes no attribute to override it, so `toolchains/rust_nix.bzl`
+reconstructs `RustToolchainInfo` — it is the prelude's rule with three lines
+changed. And the C drivers are wrappers built by `flake.nix` rather than nixpkgs'
+cc-wrapper directly, because cc-wrapper takes its `buildInputs` flags through
+`$NIX_CFLAGS_COMPILE` and `$NIX_LDFLAGS`, and a buck2 action inherits the
+*daemon's* environment, not the caller's. Baking `libiconv`'s flags into the
+drivers is what makes the link independent of that.
 
 **`system_demo_toolchains()` is not used.** It declares android, java, kotlin,
 go, ocaml, haskell and erlang alongside the four that matter, and hardcodes a
 `java_home` that does not exist here. `toolchains/BUCK` declares `cxx`,
 `genrule`, `python_bootstrap` and `rust`, and stops.
+
+**`genrule` is the one toolchain still resolved from `$PATH`.** It runs
+`/bin/sh`, which Nix does not supply and there is no store path to name. The
+crate-unpacking genrules reindeer emits reach for `mkdir` and `tar` through it.
 
 **The prelude is the one bundled with the buck2 binary** (`[external_cells]
 prelude = bundled`), not a vendored copy. It is version-matched to the binary by
