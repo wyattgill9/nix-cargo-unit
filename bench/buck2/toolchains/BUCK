@@ -1,34 +1,31 @@
-# The four toolchains buck2's rust rules actually reach for, rather than
-# `system_demo_toolchains()`: the demo set additionally declares android, java,
-# kotlin, go, ocaml, haskell and erlang, and hardcodes a `java_home` that does
-# not exist here.
+# The toolchains buck2 builds rust-analyzer with, named by Nix store path
+# rather than resolved by name on `$PATH`.
 #
-# "system" means "whatever is on `$PATH`" — `rustc`, `clang`, `python3`. The
-# devShell in `../flake.nix` is what puts the pinned ones there; see
-# ../README.md on why the pin matters.
+# Every path below comes from `[nix]` in `.buckconfig.local` beside this file,
+# which `../flake.nix` regenerates on each `nix develop`. It lives in this cell
+# rather than the root one because buckconfig in buck2 is per-cell, and this is
+# the cell that reads it. That indirection is the
+# whole mechanism: a store path is already a content hash, so moving
+# `flake.lock` changes these values and buck2 invalidates everything that read
+# them. The compiler becomes part of the cache key. Under the `system_*`
+# toolchains these replace it could not be — those resolve `rustc`, `clang` and
+# `python3` at action time, which left the devShell as the only thing deciding
+# which compiler ran and nothing inside buck2 able to notice it had changed.
+#
+# `genrule` stays a `system_*` toolchain. It runs `/bin/sh`, which is not
+# something Nix supplies and not something there is a store path to name.
 
 load("@prelude//toolchains:cxx.bzl", "system_cxx_toolchain")
 load("@prelude//toolchains:genrule.bzl", "system_genrule_toolchain")
 load("@prelude//toolchains:python.bzl", "system_python_bootstrap_toolchain")
-load("@prelude//toolchains:rust.bzl", "system_rust_toolchain")
+load(":rust_nix.bzl", "nix_rust_toolchain")
 
-system_cxx_toolchain(
-    name = "cxx",
-    visibility = ["PUBLIC"],
-)
-
-system_genrule_toolchain(
-    name = "genrule",
-    visibility = ["PUBLIC"],
-)
-
-system_python_bootstrap_toolchain(
-    name = "python_bootstrap",
-    visibility = ["PUBLIC"],
-)
-
-system_rust_toolchain(
+nix_rust_toolchain(
     name = "rust",
+    rustc = read_config("nix", "rustc"),
+    rustdoc = read_config("nix", "rustdoc"),
+    clippy_driver = read_config("nix", "clippy_driver"),
+    rustc_target_triple = read_config("nix", "target_triple"),
     # Cargo's `release` profile, spelled as rustc flags, because that is what
     # the nix-cargo-unit bench builds and the two numbers are only comparable if
     # rustc is invoked the same way. buck2 has no notion of a cargo profile: it
@@ -50,5 +47,37 @@ system_rust_toolchain(
     # Only consulted for a target that does not state its own edition. Every
     # target reindeer emits states one, so this is dead weight the rule requires.
     default_edition = "2021",
+    visibility = ["PUBLIC"],
+)
+
+# `cc` and `cxx` are the drivers built by `../flake.nix`, not nixpkgs' own
+# cc-wrapper: they carry the `$NIX_*` flags a buck2 action would otherwise have
+# to inherit from the shell. `ar` needs none of that and is the plain one.
+#
+# `linker` is the C++ driver rather than `ld`, because that is what rustc
+# invokes to link a binary and what makes cc-wrapper's link flags apply at all.
+#
+# Only the tool paths are overridden. `compiler_type`, `archiver_type` and
+# `linker_type` keep coming from the prelude's `path_clang_tools`, which selects
+# `linker_type = "darwin"` on macOS and `"gnu"` elsewhere — correct per host,
+# and nothing this bench should be restating.
+system_cxx_toolchain(
+    name = "cxx",
+    compiler = read_config("nix", "cc"),
+    cxx_compiler = read_config("nix", "cxx"),
+    linker = read_config("nix", "cxx"),
+    archiver = read_config("nix", "ar"),
+    visibility = ["PUBLIC"],
+)
+
+# The prelude's internal tools are python scripts.
+system_python_bootstrap_toolchain(
+    name = "python_bootstrap",
+    interpreter = read_config("nix", "python"),
+    visibility = ["PUBLIC"],
+)
+
+system_genrule_toolchain(
+    name = "genrule",
     visibility = ["PUBLIC"],
 )

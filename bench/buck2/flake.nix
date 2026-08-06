@@ -3,10 +3,8 @@
 
   inputs = {
     # Pinned to the exact revision `bench/nix-cargo-unit/flake.lock` resolves to.
-    # The comparison is only meaningful if both sides invoke the same rustc, and
-    # this is the only thing that guarantees it: buck2's `system_rust_toolchain`
-    # takes whatever `rustc` is on `$PATH`, so the devShell *is* the toolchain
-    # pin. Move this when the other bench's lock moves.
+    # The comparison is only meaningful if both sides invoke the same rustc.
+    # Move this when the other bench's lock moves.
     nixpkgs.url = "github:NixOS/nixpkgs/624af665418d3c65d544145b4d34ad696439570e";
   };
 
@@ -23,45 +21,91 @@
       "x86_64-linux"
     ];
     forAllSystems = fn: lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
+
+    # The C compiler drivers buck2 links with.
+    #
+    # These exist because cc-wrapper takes the flags it derives from
+    # `buildInputs` through the *environment* — `$NIX_CFLAGS_COMPILE`,
+    # `$NIX_LDFLAGS` — and a buck2 action is not a nix build, so nothing
+    # guarantees it inherits them. Baking them into the drivers makes the link
+    # independent of what buck2 chooses to forward, which is the only version of
+    # this that is true by construction rather than by luck.
+    #
+    # libiconv is the one that matters. Every binary here links `-liconv` and
+    # nothing else in the closure pulls it in, so without this the link fails
+    # with `ld: library not found for -liconv` the moment a
+    # `nix-collect-garbage -d` removes whatever unrelated derivation had been
+    # keeping it alive. That was latent under the old `$PATH` toolchains for
+    # exactly as long as something else happened to keep it in the store.
+    cxxDrivers = pkgs: let
+      wrap = name:
+        pkgs.writeShellScriptBin name ''
+          export NIX_CFLAGS_COMPILE="-isystem ${pkgs.libiconv}/include ''${NIX_CFLAGS_COMPILE-}"
+          export NIX_LDFLAGS="-L${pkgs.libiconv}/lib ''${NIX_LDFLAGS-}"
+          exec ${pkgs.stdenv.cc}/bin/${name} "$@"
+        '';
+    in
+      pkgs.symlinkJoin {
+        name = "buck2-cxx-drivers";
+        paths = [(wrap "cc") (wrap "c++")];
+      };
   in {
     # There is no package output: buck2 is the build system here, so the build
-    # happens in `buck2 build`, not in Nix. This flake exists only to put the
-    # right binaries on `$PATH` — which, for a build whose toolchain is resolved
-    # from `$PATH`, is not a small thing.
-    devShells = forAllSystems (pkgs: {
+    # happens in `buck2 build`, not in Nix. `cxxDrivers` above is a toolchain
+    # component, not a build artifact, and stays internal to the devShell.
+    devShells = forAllSystems (pkgs: let
+      drivers = cxxDrivers pkgs;
+    in {
       default = pkgs.mkShell {
+        # `reindeer buckify` shells out to cargo, which shells out to rustc, and
+        # both resolve by name. That is the only remaining reason anything is on
+        # `$PATH` here — buck2's own toolchains are pinned by store path in
+        # `.buckconfig.local` below and never consult it.
         packages = [
           pkgs.buck2
           pkgs.reindeer
-
-          # The same two derivations the nix-cargo-unit bench compiles with.
-          # `rustc` here is nixpkgs' wrapper, unlike over there: the wrapper only
-          # forwards `$NIX_RUSTFLAGS` (unset) and is what `rustc --version`
-          # resolves to on a normal `$PATH`, which is what buck2 and reindeer
-          # both expect to find.
           pkgs.rustc
           pkgs.cargo
-
-          # `system_cxx_toolchain` shells out to `clang` for the link step, and
-          # prelude's internal tools are python scripts.
-          pkgs.clang
-          pkgs.python3
         ];
 
-        # Every binary here links `-liconv`, and nothing else in this shell pulls
-        # it in: `clang` above is the compiler, not a libc closure. It has to be
-        # `buildInputs` rather than `packages`, because it is cc-wrapper's
-        # buildInputs hook that puts `-L<libiconv>/lib` into `$NIX_LDFLAGS`,
-        # which is the only way the linker buck2 invokes ever hears about it.
+        # The toolchain pin, rewritten on every `nix develop`. That rewrite is
+        # how a moved `flake.lock` becomes a cache invalidation rather than a
+        # silent change of compiler.
         #
-        # This was latent for as long as some unrelated derivation happened to
-        # keep libiconv alive in the store: the link picked it up from the
-        # ambient store rather than from anything this flake declares. A
-        # `nix-collect-garbage -d` removes it and every binary target fails with
-        # `ld: library not found for -liconv`. The nix-cargo-unit bench never had
-        # the bug — libiconv is a declared runtime dependency there, and is one
-        # of the two paths in the LSP binary's closure.
-        buildInputs = [pkgs.libiconv];
+        # It goes in the *toolchains* cell, not the root one, because buckconfig
+        # in buck2 is per-cell: `toolchains/BUCK` reads these keys, so
+        # `toolchains/` is the only place a `.buckconfig.local` holding them has
+        # any effect. A cell needs no `.buckconfig` of its own for the `.local`
+        # beside it to be read, which is why there is only the generated file
+        # there and nothing committed.
+        #
+        # The root cell is located the way buck2 locates it — nearest ancestor
+        # holding a `.buckconfig` — so entering the shell from anywhere at or
+        # below `bench/` works, not only from the `cd bench/buck2` the README
+        # documents.
+        shellHook = ''
+            root=$PWD
+            while [ "$root" != / ] && [ ! -f "$root/.buckconfig" ]; do
+              root=$(dirname "$root")
+            done
+            if [ ! -f "$root/.buckconfig" ]; then
+              echo "buck2 bench: no .buckconfig at or above $PWD, toolchains not pinned." >&2
+              echo "             enter the shell from bench/buck2 (see README)." >&2
+            else
+            cat > "$root/buck2/toolchains/.buckconfig.local" <<EOF
+          # Generated by bench/buck2/flake.nix on \`nix develop\`. Do not edit.
+          [nix]
+            rustc = ${pkgs.rustc}/bin/rustc
+            rustdoc = ${pkgs.rustc}/bin/rustdoc
+            clippy_driver = ${pkgs.clippy}/bin/clippy-driver
+            target_triple = ${pkgs.stdenv.hostPlatform.rust.rustcTarget}
+            cc = ${drivers}/bin/cc
+            cxx = ${drivers}/bin/c++
+            ar = ${pkgs.stdenv.cc}/bin/ar
+            python = ${pkgs.python3}/bin/python3
+          EOF
+            fi
+        '';
       };
     });
 
